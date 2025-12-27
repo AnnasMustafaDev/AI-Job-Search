@@ -1,4 +1,5 @@
 import time
+from urllib.parse import urlparse
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -147,7 +148,7 @@ options.add_argument("--ignore-ssl-errors")
 options.add_argument("--allow-insecure-localhost")
 driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
-driver.get("https://www.google.com/maps/search/software+companies+in+Kreuzberg+Berlin/@52.5055479,13.3725776,13z/data=!3m1!4b1?entry=ttu&g_ep=EgoyMDI1MTIwOS4wIKXMDSoASAFQAw%3D%3D")
+driver.get("https://www.google.com/maps/search/software+companies+in+Prenzlauer+Berg+Berlin/@52.5340891,13.3767673,14z/data=!3m1!4b1?entry=ttu&g_ep=EgoyMDI1MTIwOS4wIKXMDSoKLDEwMDc5MjA3MUgBUAM%3D")
 # Main Logic .......................................
 try:
     tracked_emails = load_tracked_set("tracked_emails.txt")
@@ -185,8 +186,9 @@ try:
         if not listings:
             break
         
-        for listing in listings:
+        for i,listing in enumerate(listings):
             href = listing.get_attribute("href")
+            print(f"\n\nProcessing listing {i+1}/{len(listings)}: {href}")
 
             ActionChains(driver).move_to_element(listing).pause(random.uniform(0.5, 1.5)).click().perform()
             time.sleep(1 + random.uniform(1, 3))  # keep some post-click delay
@@ -208,19 +210,32 @@ try:
                     print(f"⚠️ Redirect URL detected: {raw_url}")
                     url = get_final_url_via_selenium(raw_url)
                     website = url.split('?')[0] if url else None
+                    print(f"Resolved final URL: {website}")
                 else:
                     website = raw_url.split('?')[0]
-                
-                if website in tracked_websites:
-                    print(f"⚠️ Skipping {website} — already processed")
-                    continue
+
+                # Extract domain name only
+                if website:
+                    parsed = urlparse(website)
+                    domain = parsed.netloc  # Gets the domain part (e.g., "example.com")
+                    # Remove 'www.' prefix if present
+                    if domain.startswith('www.'):
+                        domain = domain[4:]
+                    
+                    print(f"\n\n")
+                    print("=" * 40)
+                    print(f"Extracted domain: {domain}")
+                    
+                    # Check against tracked domains
+                    if domain in tracked_websites:
+                        print(f"⚠️ Skipping {domain} — already processed")
+                        continue
+                    tracked_websites.add(domain)
 
             except Exception as e:
                 print(f"Error extracting website: {e}")
                 website = None
 
-            print(f"\n\n")
-            print("=" * 40)
             print(f"Name: {name or 'Unknown'}")
             print(f"Website: {website}")
 
@@ -232,7 +247,6 @@ try:
                     for i, email in enumerate(emails, 1):
                         tracked_emails.add(email)
                         print(f"email {i}: {email}")
-                    tracked_websites.add(website)
                 else: 
                     print(f"⚠️ No emails found on homepage of {website}")
 
@@ -250,7 +264,6 @@ try:
                             for i, email in enumerate(emails, 1):
                                 print(f"email {i}: {email}")
                                 tracked_emails.add(email)
-                            tracked_websites.add(website)
                             break  # stop after finding emails
                     else:
                         # no break happened → no emails found on any relevant page
