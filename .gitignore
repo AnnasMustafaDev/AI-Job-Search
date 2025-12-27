@@ -1,0 +1,33 @@
+# Environment files
+.env
+
+# CSV files
+*.csv
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Logs
+*.log
+
+# Virtual environments
+venv/
+.env/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Large files or archives
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# IDE-specific files
+.vscode/
+.idea/
