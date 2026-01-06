@@ -14,10 +14,9 @@ __pycache__/
 
 # Logs
 *.log
-
+*/.venv
 # Virtual environments
-venv/
-.env/
+.venv/
 
 # System files
 .DS_Store
