@@ -35,7 +35,7 @@ CHROME_DEBUG_PORT = os.getenv("CHROME_DEBUG_PORT", "9222")
 CHROME_DEBUG_ADDRESS = os.getenv("CHROME_DEBUG_ADDRESS", f"127.0.0.1:{CHROME_DEBUG_PORT}")
 CHROME_EXE_PATH = os.getenv("CHROME_EXE_PATH", r"C:\Program Files\Google\Chrome\Application\chrome.exe")
 MAX_RELEVANT_PAGES = int(os.getenv("MAX_RELEVANT_PAGES", "8"))
-START_URL = "https://www.google.com/maps/search/software+company+in+Prenzlauer+Berg,+Berlin-Pankow/@52.5357196,13.405509,15z/data=!3m1!4b1?entry=ttu&g_ep=EgoyMDI2MDQwMS4wIKXMDSoASAFQAw%3D%3D"
+START_URL = "https://www.google.com/maps/search/software+companies+in+Schöneberg+Berlin/@52.5099149,13.3103117,14z?entry=ttu&g_ep=EgoyMDI2MDUyMC4wIKXMDSoASAFQAw%3D%3D"
 
 EMAIL_BLOCK_PATTERNS = {
     "dpo*@*",

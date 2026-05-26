@@ -46,7 +46,6 @@ def normalize_sender_email(value):
 def normalize_app_password(value):
     if not value:
         return value
-    # Google displays app passwords in groups; SMTP expects a continuous string.
     return value.strip().replace(" ", "").replace("-", "")
 
 
@@ -54,21 +53,18 @@ SENDER_EMAIL = normalize_sender_email(os.getenv("SENDER_EMAIL"))
 SENDER_NAME = "Khaleel Ahmad"
 APP_PASSWORD = normalize_app_password(os.getenv("APP_PASSWORD"))
 
-SUBJECT = "[Seeking] a Working Student Opportunity"
+SUBJECT = "Data Engineer / AI Engineer – Open to New Roles in Germany"
 
-# Exact filenames of your attachments. They must be in the same folder as this script.
 ATTACHMENTS = [
-    "Khaleel_Resume.pdf",
-    "Certificate of Enrolment [PDF].pdf",
-    "Khaleel_Certifications.pdf"
+    "Khaleel_Resume.pdf"
+    #"Certificate of Enrolment [PDF].pdf",
+    #"Khaleel_Certifications.pdf"
 ]
 
-# File to track who we have already emailed
 SENT_LOG_FILE = "sent_log.txt"
 
 
 def validate_config():
-    """Ensures required secrets are loaded from environment variables."""
     missing = []
     if not SENDER_EMAIL:
         missing.append("SENDER_EMAIL")
@@ -82,104 +78,85 @@ def validate_config():
 
     return True
 
+
 # ==========================================
 # EMAIL CONTENT (Plain Text & HTML)
 # ==========================================
-# Plain text fallback for strict spam filters
+
 TEXT_BODY = """\
-Dear Engineering & Recruiting Team,
+Guten Tag,
 
-I am reaching out to see if you are looking for a highly technical Working Student to support your Data, AI, or Cloud Infrastructure workflows.
+I came across your company and wanted to reach out directly. I am based in Berlin and have spent the last few years working in Data Engineering and AI at Ericsson, building production data pipelines with Python, SQL and Airflow, and deploying LLM-powered automation systems using LangChain and the OpenAI API.
 
-Currently pursuing my M.Sc. in Artificial Intelligence at BTU Cottbus, I bring over 3.5 years of enterprise experience as a Data & Platform Engineer at Ericsson. I am looking for a dynamic environment where I can add immediate, hands-on value to your engineering teams for up to 20 hours per week.
+I work with Spark, Docker, and cloud infrastructure across AWS, GCP and Azure, and I am CKA certified. On the AI side I have built end-to-end systems where LLMs handle real business logic in production.
 
-Additionally, while I work with full professional proficiency in English, I have completed my A2 German certificate and am currently enrolled in B1 classes to ensure smooth communication and integration into local teams.
+I am now finishing my M.Sc. in AI at BTU and actively looking for my next role in Germany. If you have anything relevant open or coming up, I would love to hear about it.
 
-My core technical stack includes:
-• Data & Backend: Python, SQL, and Apache Airflow (engineered robust ETL pipelines processing 30k+ complex files daily).
-• DevOps & Cloud: Certified Kubernetes Administrator (CKA), Docker, AWS/Azure, and automating CI/CD pipelines (GitHub Actions).
-• AI & MLOps: Strong academic foundation in modern ML frameworks, with the operational skills to reliably deploy and scale models in production.
-
-I have attached my CV and university enrollment certificate for your review. If my stack aligns with your current technology roadmap, I would welcome the opportunity for a brief chat to see if there is a mutual fit.
+Website: https://khaleel.eu
+GitHub: https://github.com/khaleel-git
+LinkedIn: https://linkedin.com/in/khaleel-ahmad
 
 Best regards,
-
-Khaleel Ahmad | Data Engineer
-Mobile: +49 15563 611714
-Web: www.khaleel.eu | Email: khaleel.eu@gmail.com
-Oderberger Str. 13, 10435 Berlin, Germany
+Khaleel Ahmad
++49 15563611714
+khaleel.eu@gmail.com
 """
 
-# HTML version for clean, professional formatting
 HTML_BODY = """\
 <html>
   <body>
-    <p>Dear Engineering &amp; Recruiting Team,</p>
-    
-    <p>I am reaching out to see if you are looking for a highly technical Working Student to support your Data, AI, or Cloud Infrastructure workflows.</p>
-    
-    <p>Currently pursuing my M.Sc. in Artificial Intelligence at BTU Cottbus, I bring over 3.5 years of enterprise experience as a Data &amp; Platform Engineer at Ericsson. I am looking for a dynamic environment where I can add immediate, hands-on value to your engineering teams for up to 20 hours per week.</p>
-    
-    <p>Additionally, while I work with full professional proficiency in English, I have completed my A2 German certificate and am currently enrolled in B1 classes to ensure smooth communication and integration into local teams.</p>
-    
-    <p>My core technical stack includes:</p>
-    <ul>
-      <li><strong>Data &amp; Backend:</strong> Python, SQL, and Apache Airflow (engineered robust ETL pipelines processing 30k+ complex files daily).</li>
-      <li><strong>DevOps &amp; Cloud:</strong> Certified Kubernetes Administrator (CKA), Docker, AWS/Azure, and automating CI/CD pipelines (GitHub Actions).</li>
-      <li><strong>AI &amp; MLOps:</strong> Strong academic foundation in modern ML frameworks, with the operational skills to reliably deploy and scale models in production.</li>
-    </ul>
-    
-    <p>I have attached my CV and university enrollment certificate for your review. If my stack aligns with your current technology roadmap, I would welcome the opportunity for a brief chat to see if there is a mutual fit.</p>
-    
-    <p>Best regards,</p>
-    
+    <p>Guten Tag,</p>
+
+    <p>I came across your company and wanted to reach out directly. I am based in Berlin and have spent the last few years working in Data Engineering and AI at Ericsson, building production data pipelines with Python, SQL and Airflow, and deploying LLM-powered automation systems using LangChain and the OpenAI API.</p>
+
+    <p>I work with Spark, Docker, and cloud infrastructure across AWS, GCP and Azure, and I am CKA certified. On the AI side I have built end-to-end systems where LLMs handle real business logic in production.</p>
+
+    <p>I am now finishing my M.Sc. in AI at BTU and actively looking for my next role in Germany. If you have anything relevant open or coming up, I would love to hear about it.</p>
+
     <p>
-      <strong>Khaleel Ahmad</strong> | Data Engineer<br>
-      Mobile: +49 15563 611714<br>
-      Web: <a href="http://www.khaleel.eu">www.khaleel.eu</a> | Email: <a href="mailto:khaleel.eu@gmail.com">khaleel.eu@gmail.com</a><br>
-      Oderberger Str. 13, 10435 Berlin, Germany
+      Website: <a href="https://khaleel.eu">khaleel.eu</a><br>
+      GitHub: <a href="https://github.com/khaleel-git">github.com/khaleel-git</a><br>
+      LinkedIn: <a href="https://linkedin.com/in/khaleel-ahmad">linkedin.com/in/khaleel-ahmad</a>
+    </p>
+
+    <p>
+      <strong>Khaleel Ahmad</strong><br>
+      +49 15563611714<br>
+      <a href="mailto:khaleel.eu@gmail.com">khaleel.eu@gmail.com</a>
     </p>
   </body>
 </html>
 """
 
+
 def create_email(recipient_email):
-    """Constructs a multipart email with HTML, Plain Text, and PDF attachments."""
     msg = MIMEMultipart("mixed")
     msg["Subject"] = SUBJECT
     msg["From"] = f"{SENDER_NAME} <{SENDER_EMAIL}>"
     msg["To"] = recipient_email
 
-    # Add Plain text and HTML body (Spam filters prefer having both)
     body_part = MIMEMultipart("alternative")
     body_part.attach(MIMEText(TEXT_BODY, "plain"))
     body_part.attach(MIMEText(HTML_BODY, "html"))
     msg.attach(body_part)
 
-    # Process and attach files
     for filename in ATTACHMENTS:
         if not os.path.exists(filename):
             print(f"⚠️ Warning: File '{filename}' not found. Skipping attachment.")
             continue
-            
+
         with open(filename, "rb") as attachment:
             part = MIMEBase("application", "octet-stream")
             part.set_payload(attachment.read())
-        
-        # Encode file in base64
+
         encoders.encode_base64(part)
-        
-        # Add header as key/value pair to attachment part
-        part.add_header(
-            "Content-Disposition",
-            f"attachment; filename= {filename}",
-        )
+        part.add_header("Content-Disposition", f"attachment; filename= {filename}")
         msg.attach(part)
-        
+
     return msg
 
+
 def get_recipients(txt_file="contacts.txt"):
-    """Reads email addresses from a TXT file (one email per line)."""
     recipients = []
     try:
         with open(txt_file, mode="r", encoding="utf-8-sig") as file:
@@ -191,29 +168,26 @@ def get_recipients(txt_file="contacts.txt"):
         print(f"❌ Error: Could not find {txt_file}. Please create it with one email per line.")
     return recipients
 
+
 def get_already_sent_emails(log_file):
-    """Reads the log file to get a set of already emailed addresses."""
     if not os.path.exists(log_file):
         return set()
     with open(log_file, "r", encoding="utf-8") as f:
-        # Normalize to lowercase to avoid case-sensitive duplicate issues
         return set(line.strip().lower() for line in f if line.strip())
 
+
 def log_sent_email(log_file, email):
-    """Appends a successfully sent email to the log file."""
     with open(log_file, "a", encoding="utf-8") as f:
         f.write(f"{email.strip().lower()}\n")
 
 
 def connect_smtp(context):
-    """Create and authenticate a Gmail SMTP SSL connection."""
     server = smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context, timeout=30)
     server.login(SENDER_EMAIL, APP_PASSWORD)
     return server
 
 
 def ensure_smtp_connected(server, context):
-    """Return a live SMTP connection, reconnecting if dropped."""
     if server is None:
         return connect_smtp(context)
 
@@ -229,6 +203,7 @@ def ensure_smtp_connected(server, context):
             pass
         return connect_smtp(context)
 
+
 def main():
     if not validate_config():
         return
@@ -238,10 +213,7 @@ def main():
         print("No recipients found in your TXT file. Exiting.")
         return
 
-    # Check who we've already emailed
     already_sent = get_already_sent_emails(SENT_LOG_FILE)
-    
-    # Filter down to only those we haven't emailed yet
     already_sent_in_list = {r.lower() for r in all_recipients if r.lower() in already_sent}
     pending_recipients = [r for r in all_recipients if r.lower() not in already_sent_in_list]
 
@@ -252,10 +224,8 @@ def main():
     print(f"Found {len(all_recipients)} total recipients in TXT file.")
     print(f"Skipping {len(already_sent_in_list)} already emailed.")
     print(f"Preparing to send to {len(pending_recipients)} NEW recipients...\n")
-    
-    # Connect to Google SMTP server
+
     context = ssl.create_default_context()
-    
     server = None
 
     try:
@@ -267,14 +237,8 @@ def main():
 
             try:
                 server = ensure_smtp_connected(server, context)
-
-                # Create the message
                 msg = create_email(recipient)
-
-                # Send the email
                 server.sendmail(SENDER_EMAIL, recipient, msg.as_string())
-
-                # LOG the success immediately so we don't email them again if the script crashes
                 log_sent_email(SENT_LOG_FILE, recipient)
                 print("   -> 🚀 Sent and logged successfully")
 
@@ -296,13 +260,11 @@ def main():
                 print(f"   -> ❌ Failed to send to {recipient}: {e}")
                 continue
 
-            # Anti-Spam human delay (skip delay after the very last email)
             if index < len(pending_recipients) - 1:
-                # Random delay between 60 and 150 seconds (1 to 2.5 minutes)
-                delay = random.uniform(60, 150)
+                delay = random.uniform(30, 120)
                 print(f"   -> ⏳ Pausing for {int(delay)} seconds to mimic human sending...\n")
                 time.sleep(delay)
-                    
+
     except smtplib.SMTPAuthenticationError as auth_error:
         details = ""
         if hasattr(auth_error, "smtp_error") and auth_error.smtp_error:
@@ -327,6 +289,7 @@ def main():
                 pass
 
     print("\n🎉 Process completed!")
+
 
 if __name__ == "__main__":
     main()
