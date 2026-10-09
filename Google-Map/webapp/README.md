@@ -4,6 +4,10 @@ A local web app that runs the Google Maps scraper from a browser. You can build 
 
 ## Quick start
 
+**Windows:** double-click **`Google-Map/start-mapleads.bat`**. That's all you need. The first run finds Python (or offers to install it), creates `.venv`, installs the packages and opens the app. After that it starts in a couple of seconds. Keep the window open while you use the app.
+
+**Manual / macOS / Linux:**
+
 ```bash
 cd Google-Map
 python -m venv .venv

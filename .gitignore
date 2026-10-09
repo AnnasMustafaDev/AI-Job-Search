@@ -47,3 +47,5 @@ Thumbs.db
 !Google-Map/webapp/static/*.css
 !Google-Map/webapp/static/*.js
 Google-Map/data/
+!Google-Map/start-mapleads.bat
+!.gitattributes
