@@ -4,6 +4,7 @@ Progress is stored per query, so a stopped or interrupted job resumes at the nex
 """
 import json
 import random
+import re
 import threading
 import time
 from urllib.parse import urlparse
@@ -24,6 +25,24 @@ def build_queries(search):
         else:
             queries.append({"q": f"{kw} in {city}".strip(), "district": city})
     return queries
+
+
+POSTCODE_CITY = re.compile(r"\b\d{4,5}\s+([^,\d][^,]*)")
+
+
+def city_from_address(address, search_city=None):
+    """'Marienplatz 1, 80331 München' -> 'München' (German/Austrian/Swiss postcodes).
+
+    Google writes some addresses as '80801 München-Schwabing-West'; when the part before
+    the hyphen is the searched city, the district suffix is dropped.
+    """
+    m = POSTCODE_CITY.search(address or "")
+    if not m:
+        return None
+    city = m.group(1).strip()
+    if search_city and city.lower().startswith(search_city.lower() + "-"):
+        return city[: len(search_city)]
+    return city
 
 
 def short_error(e):
@@ -169,18 +188,20 @@ class JobRunner(threading.Thread):
 
         self.log("info", f"→ {name} · {domain or 'no website'}")
         lead_id = db.execute(
-            """INSERT INTO leads (name, domain, website, district, query, address, phone, rating, reviews,
+            """INSERT INTO leads (name, domain, website, district, city, query, address, phone, rating, reviews,
                category, lat, lng, maps_url, source, job_id, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(domain) DO UPDATE SET
                  name=CASE WHEN leads.source='import' THEN excluded.name ELSE leads.name END,
-                 district=COALESCE(excluded.district, leads.district), query=excluded.query,
+                 district=COALESCE(excluded.district, leads.district), city=COALESCE(excluded.city, leads.city),
+                 query=excluded.query,
                  address=COALESCE(excluded.address, leads.address), phone=COALESCE(excluded.phone, leads.phone),
                  rating=COALESCE(excluded.rating, leads.rating), reviews=COALESCE(excluded.reviews, leads.reviews),
                  category=COALESCE(excluded.category, leads.category), lat=COALESCE(excluded.lat, leads.lat),
                  lng=COALESCE(excluded.lng, leads.lng), maps_url=COALESCE(excluded.maps_url, leads.maps_url),
                  source=excluded.source, job_id=excluded.job_id, updated_at=excluded.updated_at""",
-            (name, domain, website, query["district"], query["q"], listing.get("address"), listing.get("phone"),
+            (name, domain, website, query["district"], city_from_address(listing.get("address"), s.get("city")) or s.get("city") or None,
+             query["q"], listing.get("address"), listing.get("phone"),
              listing.get("rating"), listing.get("reviews"), listing.get("category"), listing.get("lat"),
              listing.get("lng"), listing.get("maps_url"), source, self.job_id, db.now(), db.now()))
         if domain:

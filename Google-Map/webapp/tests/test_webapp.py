@@ -199,6 +199,29 @@ def test_crawler_skips_assets_and_duplicate_pages():
     assert crawler.rank_relevant_pages(soup, "http://acme.de", config.default_config()["crawl"]) == ["http://acme.de/impressum.html"]
 
 
+def test_lead_city_from_address_or_search(client, monkeypatch):
+    def two(query, ctx):
+        yield {"name": "A", "website": "https://a.de", "address": "Marienplatz 1, 80331 München"}
+        yield {"name": "B", "website": "https://b.de", "address": None}
+    monkeypatch.setitem(PROVIDERS, "selenium_maps", two)
+    monkeypatch.setattr(crawler, "crawl_site", lambda *a: ({}, ["/"]))
+    client.put("/api/v1/config", json={"providers": {"nominatim": {"enabled": False}}})
+    job = client.post("/api/v1/jobs", json={"search": {"keywords": ["x"], "locations": ["Altstadt"], "city": "Munich"}}).json()
+    for _ in range(50):
+        if client.get(f"/api/v1/jobs/{job['id']}").json()["status"] == "done":
+            break
+        time.sleep(0.1)
+    d = client.get("/api/v1/leads?sort=name&order=asc").json()
+    assert [(l["name"], l["city"]) for l in d["items"]] == [("A", "München"), ("B", "Munich")]
+    assert client.get("/api/v1/leads?city=München").json()["total"] == 1
+    assert "city" in client.get("/api/v1/leads/export?format=csv").text.splitlines()[0]
+
+
+def test_city_drops_google_district_suffix():
+    assert jobs.city_from_address("Leopoldstr. 180, 80804 München-Schwabing-West", "München") == "München"
+    assert jobs.city_from_address("Hauptstr. 1, 44575 Castrop-Rauxel", "Dortmund") == "Castrop-Rauxel"
+
+
 def test_reapply_drops_text_fragments():
     assert filters.check_email("year@lums.with", FILTERS)[1] == 10
     assert filters.check_email("more@www.ness.com", FILTERS)[1] == 10

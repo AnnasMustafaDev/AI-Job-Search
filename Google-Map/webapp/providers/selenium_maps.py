@@ -107,7 +107,8 @@ def _place_details(driver):
     address = _attr(driver, "//button[@data-item-id='address']", "aria-label")
     phone = _attr(driver, "//button[starts-with(@data-item-id,'phone:tel:')]", "data-item-id")
     rating_text = _text(driver, "//div[contains(@class,'F7nice')]/span/span[@aria-hidden='true']") or ""
-    reviews_label = _attr(driver, "//div[contains(@class,'F7nice')]//span[contains(@aria-label,'Rezension') or contains(@aria-label,'review')]", "aria-label") or ""
+    # Maps in the EU shows no review count any more; keep None (unknown) rather than 0.
+    reviews_label = _attr(driver, "//div[contains(@class,'F7nice')]//span[contains(@aria-label,'Rezensionen') or contains(@aria-label,'reviews')]", "aria-label") or ""
     category = _text(driver, "//button[contains(@jsaction,'category')]")
     closed_text = (_text(driver, "//span[contains(., 'Dauerhaft geschlossen') or contains(., 'Permanently closed')]") or "")
     return {
@@ -116,7 +117,7 @@ def _place_details(driver):
         "address": address.split(":", 1)[-1].strip() if address else None,
         "phone": phone.replace("phone:tel:", "") if phone else None,
         "rating": _num(rating_text),
-        "reviews": int(_num(reviews_label.replace(".", "").replace(",", "")) or 0) if reviews_label else None,
+        "reviews": int(_num(reviews_label.replace(".", "").replace(",", ""))) if _num(reviews_label.replace(".", "").replace(",", "")) else None,
         "category": category,
         "closed": bool(closed_text),
     }
@@ -257,6 +258,6 @@ def search(query, ctx):
             details["name"] = details["name"] or name_hint
             card_rating, card_reviews = _card_rating(card_text)
             details["rating"] = details["rating"] or card_rating
-            details["reviews"] = details["reviews"] or card_reviews
+            details["reviews"] = details["reviews"] if details["reviews"] is not None else card_reviews
             yielded += 1
             yield details

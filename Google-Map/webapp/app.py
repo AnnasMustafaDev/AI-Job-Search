@@ -28,6 +28,16 @@ async def lifespan(_):
 app = FastAPI(title="MapLeads", version="1.0", lifespan=lifespan)
 
 
+@app.middleware("http")
+async def revalidate_ui(request: Request, call_next):
+    # The page and its script must update together; a cached old index.html with a
+    # new app.js breaks the UI after an upgrade.
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.exception_handler(ValueError)
 async def value_error(_, exc):
     return JSONResponse({"detail": str(exc)}, status_code=400)
@@ -226,10 +236,19 @@ async def job_stream(job_id: int, request: Request, after: int = 0):
 
 
 # ---------- leads ----------
-LEAD_SORT = {"name", "district", "rating", "reviews", "status", "created_at"}
+LEAD_SORT = {"name", "city", "district", "rating", "reviews", "status", "created_at"}
 
 
-def _lead_where(q=None, district=None, status=None, type=None, has_email=False, job_id=None, include_excluded=False):
+def _lead_where(q=None, district=None, status=None, type=None, has_email=False, job_id=None,
+                include_excluded=False, city=None):
+    where, params = _lead_where_base(q, district, status, type, has_email, job_id, include_excluded)
+    if city:
+        where.append("l.city=?")
+        params.append(city)
+    return ("WHERE " + " AND ".join(where)) if where else "", params
+
+
+def _lead_where_base(q=None, district=None, status=None, type=None, has_email=False, job_id=None, include_excluded=False):
     where, params = [], []
     if not include_excluded:
         where.append("l.excluded=0")
@@ -251,7 +270,7 @@ def _lead_where(q=None, district=None, status=None, type=None, has_email=False, 
             sub += " AND e.type=?"
             params.append(type)
         where.append(sub + ")")
-    return ("WHERE " + " AND ".join(where)) if where else "", params
+    return where, params
 
 
 def _attach_best_email(leads):
@@ -268,8 +287,8 @@ def _attach_best_email(leads):
 @app.get(API + "/leads")
 def list_leads(q: str = None, district: str = None, status: str = None, type: str = None,
                has_email: bool = False, job_id: int = None, sort: str = "created_at", order: str = "desc",
-               page: int = 1, size: int = 50, include_excluded: bool = False):
-    where, params = _lead_where(q, district, status, type, has_email, job_id, include_excluded)
+               page: int = 1, size: int = 50, include_excluded: bool = False, city: str = None):
+    where, params = _lead_where(q, district, status, type, has_email, job_id, include_excluded, city)
     sort = sort if sort in LEAD_SORT else "created_at"
     direction = "ASC" if order == "asc" else "DESC"
     size = max(1, min(size, 500))
@@ -277,15 +296,17 @@ def list_leads(q: str = None, district: str = None, status: str = None, type: st
     items = db.rows(f"SELECT l.* FROM leads l {where} ORDER BY l.{sort} {direction}, l.id DESC LIMIT ? OFFSET ?",
                     (*params, size, (max(page, 1) - 1) * size))
     districts = [r["district"] for r in db.rows("SELECT DISTINCT district FROM leads WHERE district IS NOT NULL ORDER BY district")]
-    return {"total": total, "page": page, "size": size, "items": _attach_best_email(items), "districts": districts}
+    cities = [r["city"] for r in db.rows("SELECT DISTINCT city FROM leads WHERE city IS NOT NULL ORDER BY city")]
+    return {"total": total, "page": page, "size": size, "items": _attach_best_email(items),
+            "districts": districts, "cities": cities}
 
 
 @app.get(API + "/leads/export")
 def export_leads(format: str = "csv", q: str = None, district: str = None, status: str = None,
-                 type: str = None, has_email: bool = False):
-    where, params = _lead_where(q, district, status, type, has_email)
+                 type: str = None, has_email: bool = False, city: str = None):
+    where, params = _lead_where(q, district, status, type, has_email, city=city)
     items = _attach_best_email(db.rows(f"SELECT l.* FROM leads l {where} ORDER BY l.name", params))
-    cols = ["name", "domain", "website", "email", "email_type", "district", "address", "phone",
+    cols = ["name", "domain", "website", "email", "email_type", "district", "city", "address", "phone",
             "rating", "reviews", "category", "status", "source", "maps_url", "created_at"]
     if format == "json":
         return Response(json.dumps([{c: i.get(c) for c in cols} for i in items], ensure_ascii=False, indent=1),

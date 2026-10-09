@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS job_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER, ts TEXT, level TEXT, message TEXT);
 CREATE TABLE IF NOT EXISTS leads (
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, domain TEXT UNIQUE, website TEXT,
-  district TEXT, query TEXT, address TEXT, phone TEXT, rating REAL, reviews INTEGER,
+  district TEXT, city TEXT, query TEXT, address TEXT, phone TEXT, rating REAL, reviews INTEGER,
   category TEXT, lat REAL, lng REAL, maps_url TEXT, source TEXT, job_id INTEGER,
   status TEXT DEFAULT 'new', tags TEXT DEFAULT '[]', notes TEXT DEFAULT '',
   pages_crawled TEXT DEFAULT '[]', excluded INTEGER DEFAULT 0,
@@ -77,6 +77,7 @@ def init():
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with connect() as c:
             c.executescript(SCHEMA)
+            _migrate(c)
             if not c.execute("SELECT 1 FROM settings").fetchone():
                 c.execute("INSERT INTO settings (id, data) VALUES (1, ?)", (json.dumps(config.default_config()),))
             if not c.execute("SELECT 1 FROM templates").fetchone():
@@ -84,6 +85,28 @@ def init():
             if not c.execute("SELECT 1 FROM presets").fetchone():
                 _seed_presets(c)
         _initialized_for = path
+
+
+def _migrate(c):
+    cols = {r["name"] for r in c.execute("PRAGMA table_info(leads)")}
+    # Review counts parsed from the "write a review" button were stored as 0; they are unknown.
+    c.execute("UPDATE leads SET reviews=NULL WHERE source='selenium_maps' AND reviews=0")
+    if "city" in cols:
+        cities = {r["city"] for r in c.execute("SELECT DISTINCT city FROM leads WHERE city IS NOT NULL")}
+        for city in cities:
+            base = city.split("-", 1)[0]
+            if base != city and base in cities:
+                c.execute("UPDATE leads SET city=? WHERE city=?", (base, city))
+    if "city" not in cols:
+        c.execute("ALTER TABLE leads ADD COLUMN city TEXT")
+        # Backfill existing leads: city from the Maps address, else the job's search city.
+        from .jobs import city_from_address
+        for r in c.execute("SELECT l.id, l.address, j.config FROM leads l LEFT JOIN jobs j ON j.id = l.job_id").fetchall():
+            city = city_from_address(r["address"])
+            if not city and r["config"]:
+                city = json.loads(r["config"]).get("search", {}).get("city") or None
+            if city:
+                c.execute("UPDATE leads SET city=? WHERE id=?", (city, r["id"]))
 
 
 def _seed_templates(c):

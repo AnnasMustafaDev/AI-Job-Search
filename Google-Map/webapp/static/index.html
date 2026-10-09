@@ -86,7 +86,7 @@
         <h3>3 · Listing filters</h3>
         <div class="grid g2">
           <div><label class="f">Min rating <span class="rv" data-out="search.min_rating"></span></label><input type="range" min="0" max="5" step=".5" data-k="search.min_rating" data-num></div>
-          <div><label class="f">Min reviews</label><input type="number" min="0" data-k="search.min_reviews" data-num></div>
+          <div><label class="f">Min reviews <span class="muted" title="Google Maps in the EU no longer shows review counts, so the Selenium source can't read them; listings with an unknown count are kept. API sources return real counts.">ⓘ API sources only</span></label><input type="number" min="0" data-k="search.min_reviews" data-num></div>
         </div>
         <div class="grid g2" style="margin-top:6px">
           <div>
@@ -141,6 +141,7 @@
 <section class="view" id="v-leads">
   <div class="toolbar">
     <input type="text" placeholder="Search company, email, domain…" id="q" style="width:260px">
+    <select id="fCity"><option value="">All cities</option></select>
     <select id="fDistrict"><option value="">All districts</option></select>
     <select id="fStatus"><option value="">Any status</option><option>new</option><option>queued</option><option>sent</option><option>replied</option><option>bounced</option><option>rejected</option></select>
     <select id="fType"><option value="">Any email type</option><option>jobs/hr</option><option>personal</option><option>generic</option></select>
@@ -153,7 +154,7 @@
     <button class="btn p" id="queueSel">✉ Email selected</button>
   </div>
   <div class="card" style="padding:0;overflow:auto">
-    <table><thead><tr><th><input type="checkbox" id="all"></th><th data-s="name">Company</th><th data-s="district">District</th><th>Best email</th><th>Type</th><th data-s="rating">Rating</th><th>Found on</th><th data-s="status">Status</th><th></th></tr></thead><tbody id="leadRows"></tbody></table>
+    <table><thead><tr><th><input type="checkbox" id="all"></th><th data-s="name">Company</th><th data-s="city">City</th><th data-s="district">District</th><th>Best email</th><th>Type</th><th data-s="rating">Rating</th><th>Found on</th><th data-s="status">Status</th><th></th></tr></thead><tbody id="leadRows"></tbody></table>
   </div>
   <div class="pager"><span class="sm muted" id="leadCount"></span><button class="btn" id="prev">‹</button><button class="btn" id="next">›</button></div>
 </section>

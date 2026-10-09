@@ -230,6 +230,7 @@ setInterval(async () => { // keep header status fresh on every view
 function leadQuery() {
   const p = new URLSearchParams({page: state.leadPage, size: 50, sort: state.sortK, order: state.sortD});
   if ($('#q').value) p.set('q', $('#q').value);
+  if ($('#fCity').value) p.set('city', $('#fCity').value);
   if ($('#fDistrict').value) p.set('district', $('#fDistrict').value);
   if ($('#fStatus').value) p.set('status', $('#fStatus').value);
   if ($('#fType').value) p.set('type', $('#fType').value);
@@ -242,19 +243,23 @@ async function loadLeads() {
   const cur = $('#fDistrict').value;
   $('#fDistrict').innerHTML = '<option value="">All districts</option>' + d.districts.map(x => `<option>${esc(x)}</option>`).join('');
   $('#fDistrict').value = cur;
+  const curCity = $('#fCity').value;
+  $('#fCity').innerHTML = '<option value="">All cities</option>' + d.cities.map(x => `<option>${esc(x)}</option>`).join('');
+  $('#fCity').value = curCity;
   $('#fJob').hidden = !state.jobFilter; $('#fJob').innerHTML = `job #${state.jobFilter} <b style="cursor:pointer" id="clrJob">×</b>`;
   if (state.jobFilter) $('#clrJob').onclick = () => { state.jobFilter = null; loadLeads(); };
   $('#leadRows').innerHTML = d.items.length ? d.items.map(l => `<tr>
     <td><input type="checkbox" class="sel" data-id="${l.id}" ${state.selected.has(l.id) ? 'checked' : ''}></td>
     <td><b>${esc(l.name)}</b><div class="sm muted">${l.domain ? `<a href="${esc(l.website || 'https://' + l.domain)}" target="_blank" rel="noopener">${esc(l.domain)}</a>` : 'no website'}</div></td>
+    <td>${esc(l.city || '')}</td>
     <td>${esc(l.district || '')}</td>
     <td class="mono sm">${l.email ? esc(l.email) : '<span class="muted">— none</span>'}</td>
     <td>${l.email_type ? `<span class="tag">${l.email_type}</span>` : ''}</td>
-    <td>${l.rating ? `${l.rating}★ <span class="muted sm">(${l.reviews ?? 0})</span>` : '<span class="muted">–</span>'}</td>
+    <td>${l.rating ? `${l.rating}★${l.reviews != null ? ` <span class="muted sm">(${l.reviews})</span>` : ''}` : '<span class="muted">–</span>'}</td>
     <td class="mono sm muted">${esc(l.found_on || '')}</td>
     <td>${statusTag(l.status)}</td>
     <td><button class="btn" style="padding:4px 9px" onclick="openLead(${l.id})">›</button></td></tr>`).join('')
-    : '<tr><td colspan="9" class="empty">No leads match. Run a scrape, or import tracked_*.txt from the Dashboard.</td></tr>';
+    : '<tr><td colspan="10" class="empty">No leads match. Run a scrape, or import tracked_*.txt from the Dashboard.</td></tr>';
   $$('.sel').forEach(c => c.onchange = () => { c.checked ? state.selected.add(+c.dataset.id) : state.selected.delete(+c.dataset.id); selCount(); });
   const from = (d.page - 1) * d.size;
   $('#leadCount').textContent = `${d.total ? from + 1 : 0}–${from + d.items.length} of ${d.total}`;
@@ -262,7 +267,7 @@ async function loadLeads() {
   selCount();
 }
 function selCount() { $('#queueSel').textContent = `✉ Email selected (${state.selected.size})`; }
-let qT; ['#q', '#fDistrict', '#fStatus', '#fType', '#fEmail'].forEach(s => $(s).oninput = () => { clearTimeout(qT); qT = setTimeout(() => { state.leadPage = 1; loadLeads().catch(fail); }, 250); });
+let qT; ['#q', '#fCity', '#fDistrict', '#fStatus', '#fType', '#fEmail'].forEach(s => $(s).oninput = () => { clearTimeout(qT); qT = setTimeout(() => { state.leadPage = 1; loadLeads().catch(fail); }, 250); });
 $('#prev').onclick = () => { state.leadPage--; loadLeads().catch(fail); };
 $('#next').onclick = () => { state.leadPage++; loadLeads().catch(fail); };
 $$('th[data-s]').forEach(th => th.onclick = () => { state.sortD = state.sortK === th.dataset.s && state.sortD === 'asc' ? 'desc' : 'asc'; state.sortK = th.dataset.s; loadLeads().catch(fail); });
@@ -287,7 +292,7 @@ async function openLead(id) {
   const d = $('#drawer');
   d.innerHTML = `<div class="row"><h2 style="margin:0;font-size:18px">${esc(l.name)}</h2><div style="flex:1"></div><button class="btn" id="dClose">✕</button></div>
   <p class="muted sm">${esc(l.address || '')}${l.phone ? ' · ' + esc(l.phone) : ''}</p>
-  <div class="row">${statusTag(l.status)}${l.rating ? `<span class="tag">${l.rating}★ · ${l.reviews ?? 0} reviews</span>` : ''}${l.district ? `<span class="tag">${esc(l.district)}</span>` : ''}<span class="tag">${esc(srcName(l.source))}</span></div>
+  <div class="row">${statusTag(l.status)}${l.rating ? `<span class="tag">${l.rating}★${l.reviews != null ? ` · ${l.reviews} reviews` : ''}</span>` : ''}${l.district || l.city ? `<span class="tag">${esc([l.district, l.city].filter(Boolean).join(', '))}</span>` : ''}<span class="tag">${esc(srcName(l.source))}</span></div>
   <div class="kv" style="margin-top:12px"><span>Website</span><span>${l.website ? `<a href="${esc(l.website)}" target="_blank" rel="noopener">${esc(l.website)}</a>` : '–'}</span>
   <span>Category</span><span>${esc(l.category || '–')}</span><span>Query</span><span>${esc(l.query || '–')}</span>
   <span>Maps</span><span>${l.maps_url ? `<a href="${esc(l.maps_url)}" target="_blank" rel="noopener">open ↗</a>` : '–'}</span></div>
