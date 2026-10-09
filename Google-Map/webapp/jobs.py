@@ -158,7 +158,14 @@ class JobRunner(threading.Thread):
             """INSERT INTO leads (name, domain, website, district, query, address, phone, rating, reviews,
                category, lat, lng, maps_url, source, job_id, created_at, updated_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(domain) DO UPDATE SET updated_at=excluded.updated_at""",
+               ON CONFLICT(domain) DO UPDATE SET
+                 name=CASE WHEN leads.source='import' THEN excluded.name ELSE leads.name END,
+                 district=COALESCE(excluded.district, leads.district), query=excluded.query,
+                 address=COALESCE(excluded.address, leads.address), phone=COALESCE(excluded.phone, leads.phone),
+                 rating=COALESCE(excluded.rating, leads.rating), reviews=COALESCE(excluded.reviews, leads.reviews),
+                 category=COALESCE(excluded.category, leads.category), lat=COALESCE(excluded.lat, leads.lat),
+                 lng=COALESCE(excluded.lng, leads.lng), maps_url=COALESCE(excluded.maps_url, leads.maps_url),
+                 source=excluded.source, job_id=excluded.job_id, updated_at=excluded.updated_at""",
             (name, domain, website, query["district"], query["q"], listing.get("address"), listing.get("phone"),
              listing.get("rating"), listing.get("reviews"), listing.get("category"), listing.get("lat"),
              listing.get("lng"), listing.get("maps_url"), source, self.job_id, db.now(), db.now()))

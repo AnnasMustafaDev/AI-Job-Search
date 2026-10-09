@@ -150,6 +150,27 @@ def test_job_end_to_end(client, monkeypatch):
     assert client.get(f"/api/v1/leads/{lead['id']}").json()["status"] == "new"
 
 
+def test_scrape_fills_in_imported_lead(client, monkeypatch):
+    db.execute("INSERT INTO leads (name, domain, website, source, created_at, updated_at) VALUES "
+               "('acme.de','acme.de','https://acme.de','import','x','x')")
+    monkeypatch.setitem(PROVIDERS, "selenium_maps", _fake_provider)
+    monkeypatch.setattr(crawler, "crawl_site", lambda *a: ({}, ["/"]))
+    client.put("/api/v1/config", json={"providers": {"nominatim": {"enabled": False}}})
+    job = client.post("/api/v1/jobs", json={"search": {"keywords": ["it"], "locations": ["Mitte"], "city": "Berlin",
+                                                       "skip_tracked_websites": False}}).json()
+    for _ in range(50):
+        if client.get(f"/api/v1/jobs/{job['id']}").json()["status"] == "done":
+            break
+        time.sleep(0.1)
+    lead = db.row("SELECT * FROM leads WHERE domain='acme.de'")
+    assert (lead["name"], lead["district"], lead["rating"], lead["job_id"]) == ("Acme GmbH", "Mitte", 4.5, job["id"])
+
+
+def test_reapply_drops_text_fragments():
+    assert filters.check_email("year@lums.with", FILTERS)[1] == 10
+    assert filters.check_email("more@www.ness.com", FILTERS)[1] == 10
+
+
 def test_stop_and_resume(client, monkeypatch):
     def slow(query, ctx):
         for i in range(100):

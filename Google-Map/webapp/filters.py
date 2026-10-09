@@ -27,6 +27,24 @@ _INVISIBLE = (" ", " ", "​", "﻿")
 _PLACEHOLDER = re.compile(r"(?:test|fake|dummy|sample|example|demo)[._-]?\d*")
 
 
+# Two-letter TLDs are all country codes; longer ones must be real generic TLDs.
+# This drops text fragments like "year@lums.with" that the plain regex matches.
+GENERIC_TLDS = {
+    "com", "net", "org", "info", "biz", "io", "ai", "co", "app", "dev", "tech", "digital", "online", "cloud",
+    "berlin", "hamburg", "koeln", "bayern", "nrw", "ruhr", "saarland", "wien", "swiss", "eu", "gmbh", "group",
+    "company", "solutions", "systems", "software", "agency", "studio", "design", "media", "consulting", "services",
+    "network", "global", "world", "email", "team", "work", "jobs", "careers", "edu", "gov", "int", "mil", "pro",
+    "name", "mobi", "xyz", "site", "space", "store", "shop", "life", "live", "one", "data", "health", "law",
+    "legal", "finance", "capital", "ventures", "energy", "engineering", "expert", "partners", "institute", "academy",
+}
+
+
+def plausible_tld(domain):
+    tld = domain.rsplit(".", 1)[-1].lower()
+    return tld.isalpha() and (len(tld) == 2 or tld in GENERIC_TLDS)
+
+
+
 def check_email(value, filter_cfg, site_domain=None):
     """Return (normalized_email_or_None, layer, reason). layer 0 means kept."""
     layers = filter_cfg.get("layers", {})
@@ -57,6 +75,8 @@ def check_email(value, filter_cfg, site_domain=None):
         return None, 10, "path characters in domain"
     if domain.startswith("www."):
         return None, 10, "www. in mail domain (text fragment)"
+    if not plausible_tld(domain):
+        return None, 10, "not a real TLD (text fragment)"
 
     if on(9) and len(local) == 1:
         return None, 9, "single-char local part"

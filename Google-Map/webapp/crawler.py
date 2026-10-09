@@ -12,6 +12,7 @@ import requests
 import urllib3
 from bs4 import BeautifulSoup
 
+from . import filters
 from .config import GOOGLE_MAP_DIR
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -37,23 +38,6 @@ def _ua(rotate):
         except OSError:
             _user_agents = []
     return random.choice(_user_agents) if _user_agents else DEFAULT_UA
-
-
-# Two-letter TLDs are all country codes; longer ones must be real generic TLDs.
-# This drops text fragments like "year@lums.with" that the plain regex matches.
-GENERIC_TLDS = {
-    "com", "net", "org", "info", "biz", "io", "ai", "co", "app", "dev", "tech", "digital", "online", "cloud",
-    "berlin", "hamburg", "koeln", "bayern", "nrw", "ruhr", "saarland", "wien", "swiss", "eu", "gmbh", "group",
-    "company", "solutions", "systems", "software", "agency", "studio", "design", "media", "consulting", "services",
-    "network", "global", "world", "email", "team", "work", "jobs", "careers", "edu", "gov", "int", "mil", "pro",
-    "name", "mobi", "xyz", "site", "space", "store", "shop", "life", "live", "one", "data", "health", "law",
-    "legal", "finance", "capital", "ventures", "energy", "engineering", "expert", "partners", "institute", "academy",
-}
-
-
-def plausible_email(email):
-    tld = email.rsplit(".", 1)[-1].lower()
-    return tld.isalpha() and (len(tld) == 2 or tld in GENERIC_TLDS)
 
 
 def _deobfuscate(token):
@@ -93,7 +77,7 @@ def extract_emails(html, decode_obfuscation=True):
             mail = unquote(href.split(":", 1)[1].split("?", 1)[0]).strip()
             if mail:
                 found.add(mail)
-    return {e.strip().lower() for e in found if plausible_email(e.strip())}, soup
+    return {e.strip().lower() for e in found if filters.plausible_tld(e.strip().rsplit("@", 1)[-1])}, soup
 
 
 def rank_relevant_pages(soup, base_url, crawl_cfg):
