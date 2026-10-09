@@ -151,6 +151,7 @@
     <select id="bulk" style="width:auto"><option value="">Bulk action…</option><option value="status:replied">Mark replied</option><option value="status:rejected">Mark rejected</option><option value="status:new">Mark new</option><option value="exclude">Exclude</option><option value="delete">Delete</option></select>
     <button class="btn" id="expCsv">⤓ CSV</button>
     <button class="btn" id="expJson">⤓ JSON</button>
+    <button class="btn" id="saveAtt" title="Save these leads as a CSV you can attach to emails">📎 Save as attachment</button>
     <button class="btn p" id="queueSel">✉ Email selected</button>
   </div>
   <div class="card" style="padding:0;overflow:auto">
@@ -161,53 +162,169 @@
 
 <!-- OUTREACH -->
 <section class="view" id="v-outreach">
-  <div class="tabs" data-tabs><button class="on" data-t="o1">Composer</button><button data-t="o2">Campaign settings</button><button data-t="o3">SMTP account</button><button data-t="o4">Campaigns & sent log</button></div>
-  <div data-pane="o1" class="grid g2">
-    <div class="card">
-      <h3>Template <small class="row"><select style="width:auto" id="tplSel"></select><button class="btn" id="tplNew" style="padding:4px 9px">+</button><button class="btn r" id="tplDel" style="padding:4px 9px">🗑</button></small></h3>
-      <label class="f">Name</label><input type="text" id="tplName">
-      <label class="f">Subject</label><input type="text" id="subj">
-      <label class="f">Body · variables: <span class="mono">{company} {district} {website} {first_name} {first_name_sp} {sender_name}</span></label>
-      <textarea id="body" style="min-height:220px"></textarea>
-      <label class="f">Attachments (files in data/attachments)</label>
-      <div class="chips" id="attChips"></div>
-      <div class="row" style="margin-top:8px"><input type="file" id="attFile" class="sm"><button class="btn" id="tplSave">💾 Save template</button></div>
+  <div class="ostatus card" id="oStatus">
+    <div class="os-item" id="osAccount"><span class="os-l">Sending as</span><span class="os-v">…</span></div>
+    <div class="os-item"><span class="os-l">Sent today</span><span class="os-v"><b id="osToday">0</b> / <span id="osCap">60</span></span><div class="bar" style="width:110px;margin-top:4px"><i id="osBar" style="width:0"></i></div></div>
+    <div class="os-item"><span class="os-l">Send window</span><span class="os-v" id="osWindow">…</span></div>
+    <div class="os-item os-run" id="osRunning" hidden></div>
+  </div>
+
+  <div class="tabs" id="oTabs"><button class="on" data-ot="new">New campaign</button><button data-ot="history">Campaigns <span class="ct" id="oHistCount"></span></button><button data-ot="settings">Settings</button></div>
+
+  <!-- NEW CAMPAIGN -->
+  <div data-op="new">
+    <div class="stepper" id="stepper">
+      <button data-step="1" class="on"><span class="sn">1</span><span><b>Recipients</b><small id="st1">none selected</small></span></button>
+      <i></i>
+      <button data-step="2"><span class="sn">2</span><span><b>Message</b><small id="st2">—</small></span></button>
+      <i></i>
+      <button data-step="3"><span class="sn">3</span><span><b>Review &amp; send</b><small id="st3">test run</small></span></button>
     </div>
-    <div class="card">
-      <h3>Preview <small><select style="width:auto" id="pvLead"></select></small></h3>
-      <div class="preview" id="preview"></div>
-      <label class="f">Recipients</label>
-      <div class="sm" id="recips">Select leads in the Leads tab and press “Email selected”, or:</div>
-      <div class="row" style="margin-top:6px"><button class="btn" id="pickAllNew">Use all new leads with email</button></div>
-      <div class="tog"><span>Dry run (log only, nothing is sent)</span><label class="sw"><input type="checkbox" data-k="outreach.dry_run"><i></i></label></div>
-      <div class="row" style="margin-top:14px"><button class="btn" id="sendTest">Send test to me</button><div style="flex:1"></div><button class="btn p" id="launch">Launch campaign</button></div>
+
+    <!-- step 1 -->
+    <div data-sp="1" class="grid g21">
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="toolbar" style="padding:12px 12px 0;margin-bottom:10px">
+          <input type="text" id="rq" placeholder="Search company or email…" style="flex:1;min-width:160px">
+          <select id="rCity"><option value="">All cities</option></select>
+          <select id="rDistrict"><option value="">All districts</option></select>
+          <select id="rType"><option value="">Any email type</option><option value="jobs/hr">Jobs / HR</option><option value="personal">Personal</option><option value="generic">Generic</option></select>
+          <label class="sm row" title="Hide leads you already emailed or marked replied/rejected"><input type="checkbox" id="rNew" checked> only new</label>
+        </div>
+        <div class="row sm" style="padding:0 12px 10px;justify-content:space-between">
+          <span class="muted" id="rCount"></span>
+          <span class="row"><button class="link" id="rAll">Select all matching</button><span class="muted">·</span><button class="link" id="rNone">Clear selection</button></span>
+        </div>
+        <div style="max-height:480px;overflow:auto;border-top:1px solid var(--line)">
+          <table><thead><tr><th style="width:32px"><input type="checkbox" id="rPage"></th><th>Company</th><th>Location</th><th>Will be sent to</th><th>Type</th></tr></thead><tbody id="rRows"></tbody></table>
+        </div>
+        <div class="row" style="padding:10px 12px;justify-content:flex-end"><button class="btn" id="rMore" hidden>Load more</button></div>
+      </div>
+      <div>
+        <div class="card sel-card">
+          <div class="big"><span id="selN">0</span><small>recipients</small></div>
+          <p class="sm muted" id="selHint">Pick companies on the left. Each gets one email to its best address (jobs/HR first).</p>
+          <div id="selList" class="sel-list"></div>
+          <div id="skipList"></div>
+          <button class="btn p wide" data-next="2" id="toStep2" disabled>Next: write the message →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- step 2 -->
+    <div data-sp="2" class="grid g2" hidden>
+      <div class="card">
+        <div class="row" style="margin-bottom:10px">
+          <select id="tplSel" style="flex:1"></select>
+          <button class="btn" id="tplSave" title="Save changes to this template">Save</button>
+          <div class="menu"><button class="btn" id="tplMenuBtn" aria-haspopup="true">⋯</button>
+            <div class="menu-pop" id="tplMenu" hidden><button id="tplSaveAs">Save as new template…</button><button id="tplRename">Rename…</button><button id="tplDel" class="err">Delete template</button></div></div>
+        </div>
+        <div class="dirty sm" id="tplDirty" hidden>● Unsaved changes — they'll be saved automatically when you send.</div>
+        <label class="f">Subject</label>
+        <input type="text" id="subj" data-insertable>
+        <label class="f">Message</label>
+        <textarea id="body" data-insertable style="min-height:260px;line-height:1.55"></textarea>
+        <div class="vars"><span class="sm muted">Insert:</span>
+          <button data-var="{company}">Company</button><button data-var="{first_name_sp}" title="' Anna' — or nothing if the address has no name">First name</button><button data-var="{city}">City</button><button data-var="{district}">District</button><button data-var="{sender_name}">Your name</button>
+          <select id="varMore" aria-label="More lead fields"><option value="">More lead fields…</option><option value="{address}">Address</option><option value="{phone}">Phone</option><option value="{category}">Category</option><option value="{rating}">Rating</option><option value="{website}">Website</option><option value="{email}">Recipient email</option></select>
+        </div>
+        <label class="f">Attachments <span class="muted">— ticked files go with every email</span></label>
+        <div class="atts" id="attChips"></div>
+        <div class="row" style="margin-top:8px">
+          <label class="btn" for="attFile">⤒ Upload file</label><input type="file" id="attFile" hidden accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.txt,.csv,.xlsx,.xls,.json">
+          <button class="btn" id="attLeads">☰ Attach leads as CSV…</button>
+        </div>
+        <div class="leadcsv" id="leadCsvBox" hidden>
+          <div class="row"><b class="sm">Leads CSV</b><span class="muted sm" id="lcCount"></span></div>
+          <div class="row sm" style="margin-top:6px"><label><input type="radio" name="lcSrc" value="sel" checked> The recipients selected in step 1</label><label><input type="radio" name="lcSrc" value="all"> All leads with an email</label></div>
+          <label class="f">Columns</label><div class="lc-cols" id="lcCols"></div>
+          <label class="f">File name</label><input type="text" id="lcName">
+          <div class="row" style="margin-top:8px"><button class="btn p" id="lcMake">Create &amp; attach</button><button class="btn" id="lcCancel">Cancel</button></div>
+        </div>
+      </div>
+      <div>
+        <div class="card mail">
+          <div class="row" style="justify-content:space-between;margin-bottom:10px"><b class="sm">Preview</b>
+            <span class="row sm"><button class="btn sm-btn" id="pvPrev" aria-label="Previous recipient">‹</button><span id="pvPos" class="muted">sample</span><button class="btn sm-btn" id="pvNext" aria-label="Next recipient">›</button></span></div>
+          <div class="mail-card">
+            <div class="mail-h"><span>From</span><b id="pvFrom"></b><span>To</span><b id="pvTo"></b><span>Subject</span><b id="pvSubj"></b></div>
+            <div class="mail-att" id="pvAtt"></div>
+            <div class="mail-b" id="pvBody"></div>
+          </div>
+          <div id="pvWarn" class="warnbox sm" hidden></div>
+        </div>
+        <div class="row" style="margin-top:14px;justify-content:space-between"><button class="btn" data-next="1">← Recipients</button><button class="btn p" data-next="3">Next: review →</button></div>
+      </div>
+    </div>
+
+    <!-- step 3 -->
+    <div data-sp="3" hidden>
+      <div class="grid g4">
+        <div class="card kpi"><div class="l">Recipients</div><div class="v" id="rvN">0</div><div class="d" id="rvSkip"></div></div>
+        <div class="card kpi"><div class="l">Template</div><div class="v" id="rvTpl" style="font-size:16px;margin-top:10px"></div><div class="d" id="rvAtt"></div></div>
+        <div class="card kpi"><div class="l">Estimated time</div><div class="v" id="rvEta">–</div><div class="d" id="rvPace"></div></div>
+        <div class="card kpi"><div class="l">Finishes</div><div class="v" id="rvDone" style="font-size:18px;margin-top:8px">–</div><div class="d" id="rvCap"></div></div>
+      </div>
+      <div class="grid g2" style="margin-top:16px">
+        <div class="card">
+          <h3>How should this run?</h3>
+          <div class="seg" id="modeSeg">
+            <button data-mode="dry" class="on"><b>Test run</b><small>Nothing is sent. Every email is logged so you can check who'd get what.</small></button>
+            <button data-mode="live"><b>Send for real</b><small>Emails go out through your account at the pace below.</small></button>
+          </div>
+          <div id="liveBlock" class="warnbox sm" hidden></div>
+          <div class="kv" style="margin-top:14px" id="rvRules"></div>
+          <button class="link sm" data-ot-go="settings" style="margin-top:8px">Change pacing &amp; safety settings →</button>
+        </div>
+        <div class="card">
+          <h3>Before you send</h3>
+          <p class="sm muted" style="margin-top:0">Send the message to yourself first and check the formatting and the attachment in your inbox.</p>
+          <button class="btn" id="sendTest">✉ Send a test to myself</button>
+          <div class="sm" id="testRes" style="margin-top:8px"></div>
+          <div class="launch">
+            <button class="btn" data-next="2">← Message</button>
+            <button class="btn g big-btn" id="launch">Start test run</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
-  <div data-pane="o2" class="grid g2" hidden>
+
+  <!-- HISTORY -->
+  <div data-op="history" class="grid g21" hidden>
+    <div class="card" style="padding:0">
+      <div id="campList"></div>
+    </div>
+    <div class="card" id="campDetail"><div class="empty">Pick a campaign to see who got what.</div></div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div data-op="settings" class="grid g3" hidden>
+    <div class="card"><h3>Email account <small id="acctTag"></small></h3>
+      <label class="f">Your name (shown as sender)</label><input type="text" data-k="outreach.sender_name" placeholder="e.g. Khaleel Ahmad">
+      <label class="f">Email address</label><input type="text" id="secEmail" autocomplete="off">
+      <label class="f">App password <span class="muted">— Gmail: Google Account → Security → App passwords</span></label><input type="password" id="secPwd" placeholder="leave empty to keep the saved one" autocomplete="new-password">
+      <details style="margin-top:10px"><summary class="sm muted" style="cursor:pointer">Server (default Gmail)</summary>
+        <div class="grid g2"><div><label class="f">SMTP host</label><input type="text" data-k="outreach.smtp_host"></div><div><label class="f">Port (SSL)</label><input type="number" data-k="outreach.smtp_port" data-num></div></div></details>
+      <p class="sm muted">Stored in <span class="mono">Google-Map/.env</span> on this computer only.</p>
+      <div class="row"><button class="btn p" id="saveSmtp">Save</button><button class="btn" id="testSmtp">Test login</button><span class="sm" id="smtpRes"></span></div>
+    </div>
     <div class="card"><h3>Pacing</h3>
-      <div class="grid g2"><div><label class="f">Delay min (s)</label><input type="number" data-k="outreach.delay_min" data-num></div><div><label class="f">Delay max (s)</label><input type="number" data-k="outreach.delay_max" data-num></div></div>
-      <label class="f">Daily cap</label><input type="number" data-k="outreach.daily_cap" data-num>
-      <label class="f">Send window (local time)</label><div class="row"><input type="text" data-k="outreach.window_start" style="width:90px"> → <input type="text" data-k="outreach.window_end" style="width:90px"></div>
+      <label class="f">Wait between emails</label>
+      <div class="row"><input type="number" data-k="outreach.delay_min" data-num style="width:90px"> – <input type="number" data-k="outreach.delay_max" data-num style="width:90px"> <span class="muted sm">seconds</span></div>
+      <label class="f">Max emails per day</label><input type="number" data-k="outreach.daily_cap" data-num>
+      <label class="f">Only send between</label><div class="row"><input type="time" data-k="outreach.window_start" style="width:120px"> and <input type="time" data-k="outreach.window_end" style="width:120px"></div>
       <div class="tog"><span>Weekdays only</span><label class="sw"><input type="checkbox" data-k="outreach.weekdays_only"><i></i></label></div>
+      <p class="sm muted">Slow, steady sending keeps your account out of spam filters.</p>
     </div>
     <div class="card"><h3>Safety</h3>
-      <div class="tog"><span>One email per domain<small>picks by Email Filters → priority</small></span><label class="sw"><input type="checkbox" data-k="outreach.one_per_domain"><i></i></label></div>
-      <div class="tog"><span>Verify with Hunter before send<small>needs HUNTER_KEY</small></span><label class="sw"><input type="checkbox" data-k="outreach.verify_hunter"><i></i></label></div>
-      <p class="sm muted">Addresses already in the sent log are always skipped. SMTP reconnects automatically if the connection drops.</p>
-      <button class="btn p" data-save="outreach">Save</button>
+      <div class="tog"><span>One email per company<small>if a site lists several, the best one is used</small></span><label class="sw"><input type="checkbox" data-k="outreach.one_per_domain"><i></i></label></div>
+      <div class="tog"><span>Check addresses with Hunter first<small>skips undeliverable ones · needs a Hunter key</small></span><label class="sw"><input type="checkbox" data-k="outreach.verify_hunter"><i></i></label></div>
+      <div class="tog"><span>Start new campaigns as a test run</span><label class="sw"><input type="checkbox" data-k="outreach.dry_run"><i></i></label></div>
+      <p class="sm muted">People you've already emailed are always skipped.</p>
+      <button class="btn p" id="saveOutreach">Save settings</button>
     </div>
-  </div>
-  <div data-pane="o3" class="card" hidden style="max-width:560px">
-    <h3>SMTP account</h3>
-    <div class="grid g2"><div><label class="f">SMTP host</label><input type="text" data-k="outreach.smtp_host"></div><div><label class="f">Port (SSL)</label><input type="number" data-k="outreach.smtp_port" data-num></div></div>
-    <label class="f">Sender name</label><input type="text" data-k="outreach.sender_name">
-    <label class="f">Sender email <span class="sm" id="secSender"></span></label><input type="text" id="secEmail" placeholder="leave empty to keep current" autocomplete="off">
-    <label class="f">App password <span class="sm" id="secPass"></span> — stored in Google-Map/.env, never in git</label><input type="password" id="secPwd" placeholder="leave empty to keep current" autocomplete="new-password">
-    <div class="row" style="margin-top:14px"><button class="btn p" id="saveSmtp">Save</button><button class="btn" id="testSmtp">Test login</button></div>
-  </div>
-  <div data-pane="o4" hidden>
-    <div class="card" style="padding:0;margin-bottom:16px"><table><thead><tr><th>#</th><th>Template</th><th>Mode</th><th>Progress</th><th>Status</th><th></th></tr></thead><tbody id="campRows"></tbody></table></div>
-    <div class="card" style="padding:0"><table><thead><tr><th>Time (UTC)</th><th>Company</th><th>Recipient</th><th>Template</th><th>Result</th></tr></thead><tbody id="sentRows"></tbody></table></div>
   </div>
 </section>
 

@@ -9,7 +9,7 @@ import smtplib
 import ssl
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
@@ -34,6 +34,9 @@ def render(template, lead, email, sender_name):
         "company": lead.get("name") or "", "district": lead.get("district") or "",
         "website": lead.get("domain") or "", "first_name": fn, "first_name_sp": f" {fn}" if fn else "",
         "sender_name": sender_name or "",
+        "city": lead.get("city") or "", "address": lead.get("address") or "", "phone": lead.get("phone") or "",
+        "category": lead.get("category") or "", "rating": str(lead.get("rating") or ""),
+        "domain": lead.get("domain") or "", "email": email or "",
     }
 
     def fill(text):
@@ -86,7 +89,7 @@ def in_window(cfg, now=None):
 
 
 def sent_today():
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return db.row("SELECT COUNT(*) n FROM sent_log WHERE result='sent' AND dry_run=0 AND ts LIKE ?",
                   (today + "%",))["n"]
 

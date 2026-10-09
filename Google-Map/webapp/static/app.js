@@ -40,8 +40,6 @@ try { const t = localStorage.getItem('theme'); if (t) document.documentElement.d
 $$('[data-tabs]').forEach(t => t.querySelectorAll('button').forEach(b => b.onclick = () => {
   t.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
   t.parentElement.querySelectorAll('[data-pane]').forEach(p => p.hidden = p.dataset.pane !== b.dataset.t);
-  if (b.dataset.t === 'o4') loadSent().catch(fail);
-  if (b.dataset.t === 'o3') loadSecrets().catch(fail);
 }));
 
 /* ---------- settings binding ---------- */
@@ -316,81 +314,362 @@ async function openLead(id) {
 window.openLead = openLead; window.openJob = openJob;
 
 /* ---------- outreach ---------- */
-let templates = [];
-async function loadOutreach() {
-  templates = await api('/templates');
-  const cur = $('#tplSel').value;
-  $('#tplSel').innerHTML = templates.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
-  if (cur && templates.some(t => t.id == cur)) $('#tplSel').value = cur;
-  showTemplate();
-  const leads = (await api('/leads?has_email=true&size=30')).items;
-  $('#pvLead').innerHTML = '<option value="">Example GmbH (sample)</option>' + leads.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
-  if (state.recipients[0]) $('#pvLead').value = state.recipients[0].lead_id;
-  renderAttachments();
-  preview();
+// Flow: 1 pick recipients → 2 write message (live preview per real recipient) → 3 review & send.
+const O = {sel: new Set(), plan: null, step: 1, mode: 'dry', templates: [], tplDirty: false, pvIdx: 0, status: null,
+           rPage: 1, rTotal: 0, camp: null, campTimer: null, armed: false};
+
+function oTab(t) {
+  $$('#oTabs button').forEach(b => b.classList.toggle('on', b.dataset.ot === t));
+  $$('[data-op]').forEach(p => p.hidden = p.dataset.op !== t);
+  if (t === 'history') loadCampaigns().catch(fail);
+  if (t === 'settings') loadAccount().catch(fail);
 }
-function curTpl() { return templates.find(t => t.id == $('#tplSel').value); }
-function showTemplate() { const t = curTpl(); if (!t) return; $('#tplName').value = t.name; $('#subj').value = t.subject; $('#body').value = t.body; renderAttachments(); preview(); }
-$('#tplSel').onchange = showTemplate;
+$$('#oTabs button').forEach(b => b.onclick = () => oTab(b.dataset.ot));
+document.addEventListener('click', e => { const g = e.target.closest('[data-ot-go]'); if (g) oTab(g.dataset.otGo); });
+
+function oStep(n) {
+  if (n > 1 && !O.plan?.count) { toast('Pick at least one recipient first'); n = 1; }
+  O.step = n;
+  $$('#stepper button').forEach(b => { b.classList.toggle('on', +b.dataset.step === n); b.classList.toggle('done', +b.dataset.step < n); });
+  $$('[data-sp]').forEach(p => p.hidden = +p.dataset.sp !== n);
+  if (n === 2) preview();
+  if (n === 3) renderReview();
+}
+$$('#stepper button').forEach(b => b.onclick = () => oStep(+b.dataset.step));
+document.addEventListener('click', e => { const n = e.target.closest('[data-next]'); if (n) oStep(+n.dataset.next); });
+
+async function loadOutreach() {
+  await Promise.all([loadStatus(), loadTemplates(), loadPicker(true)]);
+  oStep(O.step);
+}
+
+/* status bar */
+async function loadStatus() {
+  const s = O.status = await api('/outreach/status');
+  $('#osAccount').innerHTML = s.smtp_ready
+    ? `<span class="os-l">Sending as</span><span class="os-v">${s.sender_name ? `${esc(s.sender_name)} <span class="muted">&lt;${esc(s.sender)}&gt;</span>` : `${esc(s.sender)} <button class="link sm" data-ot-go="settings">add your name</button>`}</span>`
+    : `<span class="os-l">Email account</span><span class="os-v"><span class="err">Not set up</span> <button class="link" data-ot-go="settings">Set up →</button></span>`;
+  $('#osToday').textContent = s.sent_today; $('#osCap').textContent = s.daily_cap;
+  $('#osBar').style.width = Math.min(100, s.sent_today / Math.max(1, s.daily_cap) * 100) + '%';
+  const c = s.settings;
+  $('#osWindow').innerHTML = `${c.window_start}–${c.window_end}${c.weekdays_only ? ' · Mon–Fri' : ''} <span class="tag ${s.in_window ? 'ok' : 'w'}">${s.in_window ? 'open now' : 'closed now'}</span>`;
+  const run = s.running[0];
+  $('#osRunning').hidden = !run;
+  if (run) $('#osRunning').innerHTML = `<span class="os-l">${run.dry_run ? 'Test run' : 'Sending'} #${run.id}</span><span class="os-v"><span class="spin"></span> ${run.sent + run.failed} / ${run.total} <button class="link" onclick="openCampaign(${run.id})">view</button></span>`;
+  $('#oHistCount').textContent = '';
+}
+
+/* step 1: recipient picker */
+function pickerQuery() {
+  const p = new URLSearchParams({has_email: 'true', size: 100, page: O.rPage, sort: 'name', order: 'asc'});
+  if ($('#rq').value) p.set('q', $('#rq').value);
+  if ($('#rCity').value) p.set('city', $('#rCity').value);
+  if ($('#rDistrict').value) p.set('district', $('#rDistrict').value);
+  if ($('#rType').value) p.set('type', $('#rType').value);
+  if ($('#rNew').checked) p.set('status', 'new');
+  return p;
+}
+async function loadPicker(reset) {
+  if (reset) O.rPage = 1;
+  const d = await api('/leads?' + pickerQuery());
+  O.rTotal = d.total;
+  const fill = (el, list, label) => { const cur = el.value; el.innerHTML = `<option value="">${label}</option>` + list.map(x => `<option>${esc(x)}</option>`).join(''); el.value = cur; };
+  fill($('#rCity'), d.cities, 'All cities'); fill($('#rDistrict'), d.districts, 'All districts');
+  const rows = d.items.map(l => `<tr class="pick ${O.sel.has(l.id) ? 'picked' : ''}" data-id="${l.id}">
+    <td><input type="checkbox" ${O.sel.has(l.id) ? 'checked' : ''} aria-label="Select ${esc(l.name)}"></td>
+    <td><b>${esc(l.name)}</b><div class="sm muted">${esc(l.domain || '')}</div></td>
+    <td class="sm">${esc([l.district, l.city].filter(Boolean).join(', '))}</td>
+    <td class="mono sm">${esc(l.email)}</td><td><span class="tag">${esc(l.email_type)}</span></td></tr>`).join('');
+  if (reset) $('#rRows').innerHTML = rows || '<tr><td colspan="5" class="empty">No leads with an email match these filters.</td></tr>';
+  else $('#rRows').insertAdjacentHTML('beforeend', rows);
+  const shown = $$('#rRows tr.pick').length;
+  $('#rCount').textContent = `${d.total} matching lead${d.total === 1 ? '' : 's'} with an email`;
+  $('#rMore').hidden = shown >= d.total;
+  $('#rAll').textContent = `Select all ${d.total} matching`;
+  syncPageBox();
+}
+$('#rRows').addEventListener('click', e => {
+  const tr = e.target.closest('tr.pick'); if (!tr || e.target.closest('a')) return;
+  const id = +tr.dataset.id, cb = tr.querySelector('input');
+  if (e.target !== cb) cb.checked = !cb.checked;
+  cb.checked ? O.sel.add(id) : O.sel.delete(id);
+  tr.classList.toggle('picked', cb.checked);
+  syncPageBox(); replan();
+});
+function syncPageBox() { const rows = $$('#rRows tr.pick'); $('#rPage').checked = rows.length > 0 && rows.every(r => O.sel.has(+r.dataset.id)); }
+$('#rPage').onchange = e => { $$('#rRows tr.pick').forEach(tr => { const id = +tr.dataset.id; e.target.checked ? O.sel.add(id) : O.sel.delete(id); tr.classList.toggle('picked', e.target.checked); tr.querySelector('input').checked = e.target.checked; }); replan(); };
+$('#rAll').onclick = async () => {
+  const p = pickerQuery(); p.set('size', 500);
+  let page = 1, got = 0;
+  do { p.set('page', page); const d = await api('/leads?' + p); d.items.forEach(l => O.sel.add(l.id)); got += d.items.length; page++; if (got >= d.total || !d.items.length) break; } while (page < 20);
+  loadPicker(true); replan();
+};
+$('#rNone').onclick = () => { O.sel.clear(); loadPicker(true); replan(); };
+$('#rMore').onclick = () => { O.rPage++; loadPicker(false).catch(fail); };
+let rT; ['#rq', '#rCity', '#rDistrict', '#rType', '#rNew'].forEach(s => $(s).oninput = () => { clearTimeout(rT); rT = setTimeout(() => loadPicker(true).catch(fail), 250); });
+
+let planT;
+function replan() { clearTimeout(planT); planT = setTimeout(() => doPlan().catch(fail), 200); }
+async function doPlan() {
+  const p = O.plan = O.sel.size ? await api('/outreach/plan', {method: 'POST', body: {lead_ids: [...O.sel]}}) : {count: 0, skipped: 0, recipients: [], skipped_list: []};
+  $('#selN').textContent = p.count;
+  $('#st1').textContent = p.count ? `${p.count} recipient${p.count === 1 ? '' : 's'}` : 'none selected';
+  $('#selHint').hidden = p.count > 0;
+  $('#selList').innerHTML = p.recipients.slice(0, 60).map(r => `<div class="sel-row"><span><b>${esc(r.name)}</b><small class="mono">${esc(r.email)}</small></span><button class="link" data-unsel="${r.lead_id}" aria-label="Remove">×</button></div>`).join('')
+    + (p.recipients.length > 60 ? `<div class="sm muted">…and ${p.recipients.length - 60} more</div>` : '');
+  const reasons = {};
+  p.skipped_list.forEach(s => (reasons[s.reason] ||= []).push(s.name));
+  $('#skipList').innerHTML = p.skipped ? `<details class="skipbox"><summary>${p.skipped} won't be emailed</summary>${Object.entries(reasons).map(([r, n]) => `<div class="sm"><b>${esc(r)}</b>: ${n.slice(0, 8).map(esc).join(', ')}${n.length > 8 ? '…' : ''}</div>`).join('')}</details>` : '';
+  $('#toStep2').disabled = !p.count;
+  O.pvIdx = Math.min(O.pvIdx, Math.max(0, p.count - 1));
+}
+$('#selList').addEventListener('click', e => { const b = e.target.closest('[data-unsel]'); if (!b) return; O.sel.delete(+b.dataset.unsel); loadPicker(true); replan(); });
+async function setRecipients(ids) { ids.forEach(i => O.sel.add(i)); O.step = 1; await doPlan(); }
+
+/* step 2: template editor + preview */
+async function loadTemplates(selectId) {
+  O.templates = await api('/templates');
+  const cur = selectId || $('#tplSel').value;
+  $('#tplSel').innerHTML = O.templates.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+  if (cur && O.templates.some(t => t.id == cur)) $('#tplSel').value = cur;
+  showTemplate();
+}
+const curTpl = () => O.templates.find(t => t.id == $('#tplSel').value);
+function showTemplate() {
+  const t = curTpl(); if (!t) return;
+  $('#subj').value = t.subject; $('#body').value = t.body;
+  setDirty(false); renderAttachments(); preview();
+}
+$('#tplSel').onchange = async () => {
+  if (O.tplDirty && !confirm('Discard unsaved changes to the current template?')) { $('#tplSel').value = O.lastTpl; return; }
+  showTemplate();
+};
+function setDirty(v) { O.tplDirty = v; O.lastTpl = $('#tplSel').value; $('#tplDirty').hidden = !v; $('#tplSave').classList.toggle('p', v); $('#st2').textContent = (curTpl()?.name || '—') + (v ? ' (edited)' : ''); }
+['#subj', '#body'].forEach(s => $(s).addEventListener('input', () => { setDirty(true); preview(); }));
+const attSelected = () => $$('#attChips [data-att]').filter(c => c.classList.contains('on')).map(c => c.dataset.att);
+async function saveTemplate(quiet) {
+  const t = curTpl();
+  await api('/templates/' + t.id, {method: 'PUT', body: {name: t.name, subject: $('#subj').value, body: $('#body').value, attachments: attSelected()}});
+  Object.assign(t, {subject: $('#subj').value, body: $('#body').value, attachments: attSelected()});
+  setDirty(false); if (!quiet) toast('Template saved');
+}
+$('#tplSave').onclick = () => saveTemplate().catch(fail);
+$('#tplMenuBtn').onclick = e => { e.stopPropagation(); $('#tplMenu').hidden = !$('#tplMenu').hidden; };
+document.addEventListener('click', e => { if (!e.target.closest('.menu')) $('#tplMenu').hidden = true; });
+$('#tplSaveAs').onclick = async () => {
+  const name = prompt('Name for the new template', curTpl().name + ' (copy)'); if (!name) return;
+  try { const t = await api('/templates', {method: 'POST', body: {name, subject: $('#subj').value, body: $('#body').value, attachments: attSelected()}}); await loadTemplates(t.id); toast('Saved as “' + name + '”'); } catch (e) { fail(e); }
+};
+$('#tplRename').onclick = async () => {
+  const t = curTpl(), name = prompt('Rename template', t.name); if (!name) return;
+  try { await api('/templates/' + t.id, {method: 'PUT', body: {...t, name, subject: $('#subj').value, body: $('#body').value, attachments: attSelected()}}); await loadTemplates(t.id); } catch (e) { fail(e); }
+};
+$('#tplDel').onclick = async () => {
+  if (O.templates.length < 2) return toast('Keep at least one template');
+  if (!confirm(`Delete template “${curTpl().name}”?`)) return;
+  try { await api('/templates/' + $('#tplSel').value, {method: 'DELETE'}); await loadTemplates(); } catch (e) { fail(e); }
+};
+
+// Variable buttons insert at the cursor of whichever field was last focused.
+let lastField = null;
+$$('[data-insertable]').forEach(f => f.addEventListener('focus', () => lastField = f));
+function insertVar(v) {
+  const f = lastField || $('#body'), s = f.selectionStart ?? f.value.length, e = f.selectionEnd ?? s;
+  f.value = f.value.slice(0, s) + v + f.value.slice(e); f.focus(); f.setSelectionRange(s + v.length, s + v.length);
+  setDirty(true); preview();
+}
+$$('[data-var]').forEach(b => b.onclick = () => insertVar(b.dataset.var));
+$('#varMore').onchange = e => { if (e.target.value) insertVar(e.target.value); e.target.value = ''; };
+
 async function renderAttachments() {
   const t = curTpl(); if (!t) return;
   const files = await api('/attachments');
-  $('#attChips').innerHTML = files.length ? files.map(f => `<label class="chip"><input type="checkbox" data-att="${esc(f.name)}" ${t.attachments.includes(f.name) ? 'checked' : ''}> 📎 ${esc(f.name)} <span class="muted">${(f.size / 1024).toFixed(0)} KB</span></label>`).join('') : '<span class="sm muted" style="padding:4px">No files yet — upload your CV below.</span>';
+  const icon = n => /\.(csv|xlsx?|json)$/i.test(n) ? '▦' : /\.(png|jpe?g)$/i.test(n) ? '🖼' : '📄';
+  $('#attChips').innerHTML = files.length ? files.map(f => `<button class="att ${t.attachments.includes(f.name) ? 'on' : ''}" data-att="${esc(f.name)}" title="Click to attach / detach">
+      <span>${icon(f.name)}</span><span class="att-n">${esc(f.name)}</span><small>${f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(f.size / 1024)) + ' KB'}</small>
+      <span class="att-x" data-delatt="${esc(f.name)}" title="Delete file">×</span></button>`).join('')
+    : '<span class="sm muted">No files yet. Upload your CV, or attach leads as a CSV.</span>';
 }
+$('#attChips').addEventListener('click', async e => {
+  const del = e.target.closest('[data-delatt]');
+  if (del) { e.stopPropagation(); if (!confirm(`Delete ${del.dataset.delatt} from the attachments folder?`)) return; await api('/attachments/' + encodeURIComponent(del.dataset.delatt), {method: 'DELETE'}); curTpl().attachments = curTpl().attachments.filter(a => a !== del.dataset.delatt); setDirty(true); return renderAttachments(); }
+  const b = e.target.closest('[data-att]'); if (!b) return;
+  b.classList.toggle('on'); setDirty(true); preview();
+});
 $('#attFile').onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
-  try { await api('/attachments?name=' + encodeURIComponent(f.name), {method: 'POST', body: f, raw: true}); curTpl().attachments.push(f.name); toast('Uploaded ' + f.name + ' — save the template to keep it attached'); renderAttachments(); } catch (err) { fail(err); }
+  try { await api('/attachments?name=' + encodeURIComponent(f.name), {method: 'POST', body: f, raw: true}); if (!curTpl().attachments.includes(f.name)) curTpl().attachments.push(f.name); setDirty(true); await renderAttachments(); preview(); toast('Uploaded and attached ' + f.name); } catch (err) { fail(err); }
   e.target.value = '';
 };
-$('#tplSave').onclick = async () => {
-  const t = curTpl();
-  const attachments = $$('[data-att]').filter(c => c.checked).map(c => c.dataset.att);
-  try { await api('/templates/' + t.id, {method: 'PUT', body: {name: $('#tplName').value, subject: $('#subj').value, body: $('#body').value, attachments}}); toast('Template saved'); loadOutreach(); } catch (e) { fail(e); }
+
+// Leads → CSV attachment
+const LC_COLS = {name: 'Company', email: 'Email', website: 'Website', city: 'City', district: 'District', address: 'Address', phone: 'Phone', category: 'Category', rating: 'Rating', email_type: 'Email type', maps_url: 'Maps link', status: 'Status'};
+const LC_DEFAULT = ['name', 'email', 'website', 'city', 'district', 'phone'];
+function openLeadCsv() {
+  $('#leadCsvBox').hidden = false;
+  $('#lcCols').innerHTML = Object.entries(LC_COLS).map(([k, v]) => `<label class="chip"><input type="checkbox" value="${k}" ${LC_DEFAULT.includes(k) ? 'checked' : ''}> ${v}</label>`).join('');
+  $('#lcName').value = `leads-${new Date().toISOString().slice(0, 10)}.csv`;
+  const hasSel = O.sel.size > 0;
+  $$('input[name=lcSrc]').forEach(r => { r.checked = (r.value === 'sel') === hasSel; if (r.value === 'sel') r.disabled = !hasSel; });
+  $('#lcCount').textContent = hasSel ? `· ${O.sel.size} selected` : '';
+}
+$('#attLeads').onclick = openLeadCsv;
+$('#lcCancel').onclick = () => $('#leadCsvBox').hidden = true;
+$('#lcMake').onclick = async () => {
+  const src = $$('input[name=lcSrc]').find(r => r.checked).value;
+  const columns = $$('#lcCols input:checked').map(c => c.value);
+  if (!columns.length) return toast('Pick at least one column');
+  try {
+    const r = await api('/attachments/from-leads', {method: 'POST', body: {name: $('#lcName').value, columns, ids: src === 'sel' ? [...O.sel] : null, filters: src === 'all' ? {has_email: true} : {}}});
+    if (!curTpl().attachments.includes(r.name)) curTpl().attachments.push(r.name);
+    setDirty(true); $('#leadCsvBox').hidden = true; await renderAttachments(); preview();
+    toast(`Attached ${r.name} (${r.rows} leads)`);
+  } catch (e) { fail(e); }
 };
-$('#tplNew').onclick = async () => { const name = prompt('Template name'); if (!name) return; try { const t = await api('/templates', {method: 'POST', body: {name, subject: '', body: 'Guten Tag{first_name_sp},\n\n\n\nBest regards,\n{sender_name}'}}); await loadOutreach(); $('#tplSel').value = t.id; showTemplate(); } catch (e) { fail(e); } };
-$('#tplDel').onclick = async () => { if (!confirm('Delete this template?')) return; try { await api('/templates/' + $('#tplSel').value, {method: 'DELETE'}); loadOutreach(); } catch (e) { fail(e); } };
+
 let pvT;
 function preview() {
   clearTimeout(pvT);
   pvT = setTimeout(async () => {
+    const recips = O.plan?.recipients || [];
+    const r0 = recips[O.pvIdx];
+    $('#pvPos').textContent = recips.length ? `${O.pvIdx + 1} / ${recips.length}` : 'sample';
+    $('#pvPrev').disabled = O.pvIdx <= 0; $('#pvNext').disabled = O.pvIdx >= recips.length - 1;
     try {
-      const r = await api('/outreach/preview', {method: 'POST', body: {lead_id: $('#pvLead').value || null, subject: $('#subj').value, body: $('#body').value}});
-      const att = $$('[data-att]').filter(c => c.checked).map(c => '📎 ' + c.dataset.att).join('  ');
-      $('#preview').textContent = `To: ${r.to || '(no email)'}\nSubject: ${r.subject}${att ? '\n' + att : ''}\n\n${r.body}`;
-    } catch (e) { $('#preview').textContent = e.message; }
-  }, 200);
+      const r = await api('/outreach/preview', {method: 'POST', body: {lead_id: r0?.lead_id || null, subject: $('#subj').value, body: $('#body').value}});
+      const st = O.status || {};
+      $('#pvFrom').textContent = st.sender ? (st.sender_name ? `${st.sender_name} <${st.sender}>` : st.sender) : '(email account not set up)';
+      $('#pvTo').textContent = (r0 ? r0.name + ' · ' : 'Example GmbH · ') + (r.to || '');
+      $('#pvSubj').textContent = r.subject || '(no subject)';
+      $('#pvBody').textContent = r.body;
+      const atts = attSelected();
+      $('#pvAtt').innerHTML = atts.map(a => `<span class="tag">📎 ${esc(a)}</span>`).join('');
+      const warns = [];
+      if (!r.subject.trim()) warns.push('The subject is empty.');
+      const left = (r.subject + r.body).match(/\{[a-z_]+\}/g);
+      if (left) warns.push(`Unknown placeholder ${[...new Set(left)].join(', ')} — it will be sent as typed.`);
+      if (/\{first_name/.test($('#body').value) && r0 && !/^Guten Tag \w|^Hallo \w|^Dear \w|^Hi \w/m.test(r.body)) warns.push('No first name found in this address, so the greeting has no name. That reads fine.');
+      if (!atts.length) warns.push('No attachment. Add your CV if you want to send one.');
+      $('#pvWarn').hidden = !warns.length; $('#pvWarn').innerHTML = warns.map(w => '• ' + esc(w)).join('<br>');
+    } catch (e) { $('#pvBody').textContent = e.message; }
+  }, 150);
 }
-['#pvLead', '#subj', '#body'].forEach(s => $(s).addEventListener('input', preview));
-async function setRecipients(ids) {
-  const r = await api('/outreach/plan', {method: 'POST', body: {lead_ids: ids}});
-  state.recipients = r.recipients; state.recipientIds = ids;
-  $('#recips').innerHTML = `<b>${r.count}</b> recipients${r.skipped ? ` · <span class="muted">${r.skipped} skipped (no email, already emailed or same domain)</span>` : ''}<div class="mono sm muted" style="max-height:90px;overflow:auto;margin-top:4px">${r.recipients.map(x => esc(x.email)).join('<br>')}</div>`;
-  $('#launch').textContent = `Launch campaign (${r.count})`;
+$('#pvPrev').onclick = () => { O.pvIdx = Math.max(0, O.pvIdx - 1); preview(); };
+$('#pvNext').onclick = () => { O.pvIdx = Math.min((O.plan?.count || 1) - 1, O.pvIdx + 1); preview(); };
+
+/* step 3: review */
+function fmtDur(sec) { if (sec < 90) return Math.round(sec) + ' s'; const m = sec / 60; if (m < 90) return Math.round(m) + ' min'; return (m / 60).toFixed(1).replace('.0', '') + ' h'; }
+function renderReview() {
+  const p = O.plan, c = S.outreach, n = p.count, st = O.status || {sent_today: 0, daily_cap: c.daily_cap};
+  $('#rvN').textContent = n; $('#rvSkip').textContent = p.skipped ? `${p.skipped} skipped` : 'none skipped';
+  $('#rvTpl').textContent = curTpl()?.name || '—';
+  const atts = attSelected(); $('#rvAtt').textContent = atts.length ? '📎 ' + atts.join(', ') : 'no attachments';
+  const live = O.mode === 'live';
+  const avg = (Number(c.delay_min) + Number(c.delay_max)) / 2;
+  if (!live) { $('#rvEta').textContent = 'instant'; $('#rvPace').textContent = 'test run, nothing waits'; $('#rvDone').textContent = 'right away'; $('#rvCap').textContent = 'doesn\'t count toward the daily cap'; }
+  else {
+    const cap = Number(c.daily_cap) || 60, todayLeft = Math.max(0, cap - st.sent_today);
+    const days = n <= todayLeft ? 0 : Math.ceil((n - todayLeft) / cap);
+    $('#rvEta').textContent = fmtDur(Math.max(0, n - 1) * avg) + ' sending';
+    $('#rvPace').textContent = `one every ${c.delay_min}–${c.delay_max} s`;
+    // Outside the send window nothing goes out until it opens again.
+    $('#rvDone').textContent = !st.in_window && days === 0 ? `after ${c.window_start} next ${c.weekdays_only ? 'weekday' : 'day'}`
+      : days === 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days + 1} days`;
+    if (!st.in_window) $('#rvEta').textContent = 'waits for window';
+    $('#rvCap').textContent = `${todayLeft} of ${cap} left today · ${c.window_start}–${c.window_end}${c.weekdays_only ? ' Mon–Fri' : ''}`;
+  }
+  $('#rvRules').innerHTML = `<span>Per company</span><span>${c.one_per_domain ? 'one email' : 'every address'}</span>
+    <span>Already emailed</span><span>always skipped</span><span>Verify first</span><span>${c.verify_hunter ? 'yes, with Hunter' : 'no'}</span>`;
+  $$('#modeSeg button').forEach(b => b.classList.toggle('on', b.dataset.mode === O.mode));
+  const blocked = live && !st.smtp_ready;
+  $('#liveBlock').hidden = !live;
+  $('#liveBlock').innerHTML = blocked ? 'Your email account isn\'t set up yet. <button class="link" data-ot-go="settings">Set it up →</button>'
+    : `Real emails go to ${n} compan${n === 1 ? 'y' : 'ies'} from <b>${esc(st.sender || '')}</b>. You can stop at any time; emails already sent can't be recalled.`;
+  O.armed = false;
+  const btn = $('#launch');
+  btn.disabled = blocked || !n;
+  btn.className = 'btn big-btn ' + (live ? 'p' : 'g');
+  btn.textContent = live ? `Send ${n} email${n === 1 ? '' : 's'}` : `Start test run (${n})`;
+  $('#st3').textContent = live ? 'send for real' : 'test run';
 }
-$('#pickAllNew').onclick = async () => { try { const d = await api('/leads?has_email=true&status=new&size=500'); await setRecipients(d.items.map(l => l.id)); } catch (e) { fail(e); } };
+$$('#modeSeg button').forEach(b => b.onclick = () => { O.mode = b.dataset.mode; renderReview(); });
 $('#launch').onclick = async () => {
-  if (!state.recipients.length) return toast('Pick recipients first');
-  const dry = S.outreach.dry_run;
-  if (!confirm(`${dry ? 'DRY RUN — nothing will be sent.\n\n' : ''}Send "${curTpl().name}" to ${state.recipients.length} recipients?`)) return;
-  try { await saveSections(['outreach']); const r = await api('/outreach/campaigns', {method: 'POST', body: {template_id: +$('#tplSel').value, lead_ids: state.recipientIds, dry_run: dry}}); toast(`Campaign #${r.id} started: ${r.recipients} recipients${r.dry_run ? ' (dry run)' : ''}`); state.selected.clear(); } catch (e) { fail(e); }
+  const live = O.mode === 'live', btn = $('#launch');
+  // Real sends take a second click instead of a browser confirm dialog.
+  if (live && !O.armed) { O.armed = true; btn.textContent = `Click again to send ${O.plan.count} emails`; btn.classList.add('armed'); setTimeout(() => { if (O.armed) renderReview(); }, 5000); return; }
+  btn.disabled = true;
+  try {
+    if (O.tplDirty) { await saveTemplate(true); toast('Template saved'); }
+    const r = await api('/outreach/campaigns', {method: 'POST', body: {template_id: +$('#tplSel').value, lead_ids: [...O.sel], dry_run: !live}});
+    toast(`${live ? 'Sending' : 'Test run'} started: ${r.recipients} recipients`);
+    if (live) { O.sel.clear(); O.plan = null; O.step = 1; doPlan(); loadPicker(true); }
+    openCampaign(r.id);
+  } catch (e) { fail(e); } finally { btn.disabled = false; renderReview(); }
 };
-$('#sendTest').onclick = async () => { try { const r = await api('/outreach/send-test', {method: 'POST', body: {template_id: +$('#tplSel').value, lead_id: $('#pvLead').value ? +$('#pvLead').value : null}}); toast('Test sent to ' + r.sent_to); } catch (e) { fail(e); } };
-async function loadSent() {
-  const [c, s] = await Promise.all([api('/outreach/campaigns'), api('/outreach/sent')]);
-  $('#campRows').innerHTML = c.length ? c.map(x => `<tr><td>#${x.id}</td><td>${esc(x.template)}</td><td>${x.dry_run ? 'dry run' : 'live'}</td><td>${x.sent + x.failed} / ${x.total}${x.failed ? ` <span class="err">(${x.failed} failed)</span>` : ''}</td><td>${statusTag(x.status)}</td><td>${x.status === 'running' ? `<button class="btn r" style="padding:3px 8px" onclick="stopCamp(${x.id})">■</button>` : ''}</td></tr>`).join('') : '<tr><td colspan="6" class="empty">No campaigns yet.</td></tr>';
-  $('#sentRows').innerHTML = s.length ? s.map(x => `<tr><td class="mono sm">${x.ts}</td><td>${esc(x.company || '')}</td><td class="mono sm">${esc(x.email)}</td><td>${esc(x.template)}</td><td>${statusTag(x.result)}${x.dry_run ? ' <span class="muted sm">dry</span>' : ''} <span class="sm err">${esc(x.error || '')}</span></td></tr>`).join('') : '<tr><td colspan="5" class="empty">Nothing sent yet.</td></tr>';
+$('#sendTest').onclick = async e => {
+  const b = e.currentTarget; b.disabled = true; $('#testRes').innerHTML = '<span class="spin"></span> sending…';
+  try {
+    if (O.tplDirty) await saveTemplate(true);
+    const r0 = O.plan?.recipients[O.pvIdx];
+    const r = await api('/outreach/send-test', {method: 'POST', body: {template_id: +$('#tplSel').value, lead_id: r0?.lead_id || null}});
+    $('#testRes').innerHTML = `<span class="tag ok">sent</span> Check ${esc(r.sent_to)}. It's personalised for ${esc(r0?.name || 'Example GmbH')}.`;
+  } catch (err) { $('#testRes').innerHTML = `<span class="err">${esc(err.message)}</span>`; } finally { b.disabled = false; }
+};
+
+/* campaigns */
+async function loadCampaigns() {
+  const list = await api('/outreach/campaigns');
+  $('#oHistCount').textContent = list.length || '';
+  $('#campList').innerHTML = list.length ? list.map(c => {
+    const done = c.sent + c.failed, pct = c.total ? done / c.total * 100 : 0;
+    return `<button class="camp ${O.camp === c.id ? 'on' : ''}" onclick="openCampaign(${c.id})">
+      <div class="row" style="justify-content:space-between"><b>#${c.id} · ${esc(c.template || 'deleted template')}</b>${statusTag(c.status.split(':')[0])}</div>
+      <div class="bar" style="margin:8px 0 6px"><i style="width:${pct}%"></i></div>
+      <div class="row sm muted" style="justify-content:space-between"><span>${c.dry_run ? 'Test run' : 'Real send'} · ${done}/${c.total}${c.failed ? ` · <span class="err">${c.failed} failed</span>` : ''}</span><span>${c.created_at.slice(0, 16).replace('T', ' ')}</span></div></button>`;
+  }).join('') : '<div class="empty">No campaigns yet. Start one from “New campaign”.</div>';
 }
-window.stopCamp = async id => { await api(`/outreach/campaigns/${id}/stop`, {method: 'POST'}); setTimeout(loadSent, 500); };
-async function loadSecrets() {
+async function openCampaign(id) {
+  O.camp = id; oTab('history');
+  clearTimeout(O.campTimer);
+  const c = await api('/outreach/campaigns/' + id);
+  const done = c.sent + c.failed;
+  const labels = {'dry-run': 'logged (test)', sent: 'sent', bounced: 'bounced', failed: 'failed'};
+  $('#campDetail').innerHTML = `<div class="row" style="justify-content:space-between"><h3 style="margin:0">#${c.id} · ${esc(c.template || '')}</h3>
+      ${c.live ? `<button class="btn r" onclick="stopCamp(${c.id})">■ Stop</button>` : statusTag(c.status.split(':')[0])}</div>
+    <p class="sm muted">${c.dry_run ? 'Test run, nothing was sent.' : 'Real send.'} Started ${c.created_at.replace('T', ' ').slice(0, 16)} UTC${c.finished_at ? ', finished ' + c.finished_at.replace('T', ' ').slice(11, 16) : ''}.</p>
+    ${c.status.startsWith('failed') ? `<div class="warnbox sm">${esc(c.status)}</div>` : ''}
+    <div class="bar" style="margin:10px 0"><i style="width:${c.total ? done / c.total * 100 : 0}%"></i></div>
+    <div class="sm" style="margin-bottom:10px"><b>${done}</b> of ${c.total} processed${c.failed ? ` · <span class="err">${c.failed} failed</span>` : ''}${c.live && !c.dry_run ? ' · next email in a few minutes (pacing)' : ''}</div>
+    <div style="max-height:420px;overflow:auto"><table><thead><tr><th>Time</th><th>Company</th><th>Email</th><th>Result</th></tr></thead><tbody>
+    ${c.log.length ? c.log.map(x => `<tr><td class="mono sm">${x.ts.slice(11, 16)}</td><td>${esc(x.company || '')}</td><td class="mono sm">${esc(x.email)}</td><td>${statusTag(labels[x.result] || x.result)} <span class="sm err">${esc(x.error || '')}</span></td></tr>`).join('') : '<tr><td colspan="4" class="empty">Nothing processed yet.</td></tr>'}
+    </tbody></table></div>`;
+  loadCampaigns();
+  if (c.live) O.campTimer = setTimeout(() => { if (state.view === 'outreach' && O.camp === id) openCampaign(id); }, 2500);
+  else loadStatus().catch(() => {});
+}
+window.openCampaign = openCampaign;
+window.stopCamp = async id => { await api(`/outreach/campaigns/${id}/stop`, {method: 'POST'}); toast('Stopping after the current email'); setTimeout(() => openCampaign(id), 800); };
+
+/* settings */
+async function loadAccount() {
   const s = await api('/secrets');
-  $('#secSender').innerHTML = s.SENDER_EMAIL ? '<span class="tag ok">set</span>' : '<span class="tag b">not set</span>';
-  $('#secPass').innerHTML = s.APP_PASSWORD ? '<span class="tag ok">set</span>' : '<span class="tag b">not set</span>';
+  $('#acctTag').innerHTML = s.SENDER_EMAIL && s.APP_PASSWORD ? '<span class="tag ok">connected</span>' : '<span class="tag w">not set up</span>';
+  $('#secEmail').placeholder = O.status?.sender || 'you@gmail.com';
 }
 $('#saveSmtp').onclick = async () => {
-  const body = {}; if ($('#secEmail').value) body.SENDER_EMAIL = $('#secEmail').value; if ($('#secPwd').value) body.APP_PASSWORD = $('#secPwd').value;
-  try { if (Object.keys(body).length) await api('/secrets', {method: 'PUT', body}); await saveSections(['outreach']); $('#secEmail').value = $('#secPwd').value = ''; loadSecrets(); } catch (e) { fail(e); }
+  const body = {}; if ($('#secEmail').value) body.SENDER_EMAIL = $('#secEmail').value.trim(); if ($('#secPwd').value) body.APP_PASSWORD = $('#secPwd').value;
+  try { if (Object.keys(body).length) await api('/secrets', {method: 'PUT', body}); await saveSections(['outreach']); $('#secEmail').value = $('#secPwd').value = ''; loadAccount(); loadStatus(); } catch (e) { fail(e); }
 };
-$('#testSmtp').onclick = async () => { try { await api('/outreach/test-smtp', {method: 'POST'}); toast('SMTP login OK'); } catch (e) { fail(e); } };
+$('#testSmtp').onclick = async () => { $('#smtpRes').innerHTML = '<span class="spin"></span>'; try { await api('/outreach/test-smtp', {method: 'POST'}); $('#smtpRes').innerHTML = '<span class="tag ok">login works</span>'; } catch (e) { $('#smtpRes').innerHTML = `<span class="err">${esc(e.message)}</span>`; } };
+$('#saveOutreach').onclick = async () => { try { await saveSections(['outreach']); loadStatus(); } catch (e) { fail(e); } };
+
+/* Leads panel → attachment */
+$('#saveAtt').onclick = async () => {
+  const name = prompt('Save the leads in this view as an attachment named:', `leads-${new Date().toISOString().slice(0, 10)}.csv`); if (!name) return;
+  const p = Object.fromEntries(leadQuery());
+  const ids = state.selected.size ? [...state.selected] : null;
+  try { const r = await api('/attachments/from-leads', {method: 'POST', body: {name, ids, filters: ids ? {} : {q: p.q, city: p.city, district: p.district, status: p.status, type: p.type, has_email: p.has_email === 'true'}}}); toast(`Saved ${r.name} (${r.rows} leads). Attach it in Outreach → Message.`); } catch (e) { fail(e); }
+};
 
 /* ---------- filters ---------- */
 const LIST_LABELS = {patterns: 'Block patterns (wildcard)', domains: 'Block domains', domain_suffixes: 'Block domain suffixes', domain_extensions: 'Block domain extensions', localparts: 'Block local parts (exact)', localpart_prefixes: 'Block local-part prefixes', localpart_contains: 'Block local-part contains'};

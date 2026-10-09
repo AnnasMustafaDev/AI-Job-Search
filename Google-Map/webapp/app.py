@@ -304,22 +304,35 @@ def list_leads(q: str = None, district: str = None, status: str = None, type: st
 @app.get(API + "/leads/export")
 def export_leads(format: str = "csv", q: str = None, district: str = None, status: str = None,
                  type: str = None, has_email: bool = False, city: str = None):
-    where, params = _lead_where(q, district, status, type, has_email, city=city)
-    items = _attach_best_email(db.rows(f"SELECT l.* FROM leads l {where} ORDER BY l.name", params))
-    cols = ["name", "domain", "website", "email", "email_type", "district", "city", "address", "phone",
-            "rating", "reviews", "category", "status", "source", "maps_url", "created_at"]
+    items = _export_items(q, district, status, type, has_email, city)
     if format == "json":
-        return Response(json.dumps([{c: i.get(c) for c in cols} for i in items], ensure_ascii=False, indent=1),
+        return Response(json.dumps([{c: i.get(c) for c in EXPORT_COLS} for i in items], ensure_ascii=False, indent=1),
                         media_type="application/json",
                         headers={"Content-Disposition": "attachment; filename=leads.json"})
+    return Response(_leads_csv(items), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": "attachment; filename=leads.csv"})
+
+
+EXPORT_COLS = ["name", "domain", "website", "email", "email_type", "district", "city", "address", "phone",
+               "rating", "reviews", "category", "status", "source", "maps_url", "created_at"]
+
+
+def _export_items(q=None, district=None, status=None, type=None, has_email=False, city=None, ids=None):
+    where, params = _lead_where(q, district, status, type, has_email, city=city)
+    if ids:
+        where = (where + " AND " if where else "WHERE ") + f"l.id IN ({','.join('?' * len(ids))})"
+        params = [*params, *ids]
+    return _attach_best_email(db.rows(f"SELECT l.* FROM leads l {where} ORDER BY l.name", params))
+
+
+def _leads_csv(items, cols=EXPORT_COLS):
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(cols)
     for i in items:
         w.writerow([i.get(c) if i.get(c) is not None else "" for c in cols])
     # BOM so Excel opens umlauts correctly.
-    return Response("﻿" + buf.getvalue(), media_type="text/csv; charset=utf-8",
-                    headers={"Content-Disposition": "attachment; filename=leads.csv"})
+    return "﻿" + buf.getvalue()
 
 
 @app.get(API + "/leads/{lead_id}")
@@ -454,6 +467,27 @@ def delete_template(tid: int):
 
 
 SAFE_NAME = re.compile(r"^[\w\-. ()äöüÄÖÜß]{1,120}$")
+ATTACHMENT_TYPES = (".pdf", ".docx", ".doc", ".png", ".jpg", ".jpeg", ".txt", ".csv", ".xlsx", ".xls", ".json")
+
+
+@app.post(API + "/attachments/from-leads")
+def attachment_from_leads(payload: dict = Body(...)):
+    """Save leads (selected ids or the current Leads filter) as a CSV attachment."""
+    f = payload.get("filters") or {}
+    items = _export_items(f.get("q"), f.get("district"), f.get("status"), f.get("type"),
+                          bool(f.get("has_email")), f.get("city"), [int(i) for i in payload.get("ids") or []][:5000])
+    if not items:
+        raise ValueError("No leads match — nothing to attach")
+    name = os.path.basename(payload.get("name") or f"leads-{db.now()[:10]}.csv")
+    if not name.lower().endswith(".csv"):
+        name += ".csv"
+    if not SAFE_NAME.match(name):
+        raise ValueError("Use a simple file name (letters, numbers, - _ . spaces)")
+    cols = [c for c in payload.get("columns") or EXPORT_COLS if c in EXPORT_COLS] or EXPORT_COLS
+    os.makedirs(config.ATTACHMENTS_DIR, exist_ok=True)
+    with open(os.path.join(config.ATTACHMENTS_DIR, name), "w", encoding="utf-8", newline="") as fh:
+        fh.write(_leads_csv(items, cols))
+    return {"name": name, "rows": len(items), "size": os.path.getsize(os.path.join(config.ATTACHMENTS_DIR, name))}
 
 
 @app.get(API + "/attachments")
@@ -466,8 +500,8 @@ def list_attachments():
 @app.post(API + "/attachments")
 async def upload_attachment(request: Request, name: str):
     name = os.path.basename(name)
-    if not SAFE_NAME.match(name) or not name.lower().endswith((".pdf", ".docx", ".doc", ".png", ".jpg", ".txt")):
-        raise ValueError("Allowed: pdf, doc(x), png, jpg, txt with a simple file name")
+    if not SAFE_NAME.match(name) or not name.lower().endswith(ATTACHMENT_TYPES):
+        raise ValueError("Allowed: " + ", ".join(ATTACHMENT_TYPES) + " with a simple file name")
     data = await request.body()
     if len(data) > 10 * 1024 * 1024:
         raise ValueError("Max 10 MB")
@@ -499,8 +533,29 @@ def preview(payload: dict = Body(...)):
 @app.post(API + "/outreach/plan")
 def plan(payload: dict = Body(...)):
     recipients, skipped = outreach.plan_recipients(payload.get("lead_ids", []), db.get_settings())
+    names = {r["id"]: r["name"] for r in db.rows(
+        f"SELECT id, name FROM leads WHERE id IN ({','.join('?' * len(skipped)) or 'NULL'})", [i for i, _ in skipped])}
     return {"count": len(recipients), "skipped": len(skipped),
-            "recipients": [{"lead_id": l["id"], "name": l["name"], "email": e} for l, e in recipients[:200]]}
+            "recipients": [{"lead_id": l["id"], "name": l["name"], "email": e, "city": l.get("city"),
+                            "district": l.get("district")} for l, e in recipients],
+            "skipped_list": [{"lead_id": i, "name": names.get(i, "?"), "reason": r} for i, r in skipped]}
+
+
+@app.get(API + "/outreach/status")
+def outreach_status():
+    """Everything the Outreach screen needs to say whether sending will work right now."""
+    cfg = db.get_settings()["outreach"]
+    sender = secrets_store.get("SENDER_EMAIL")
+    return {
+        "smtp_ready": bool(sender and secrets_store.is_set("APP_PASSWORD")),
+        "sender": sender,
+        "sender_name": cfg.get("sender_name") or secrets_store.get("SENDER_NAME"),
+        "sent_today": outreach.sent_today(),
+        "daily_cap": int(cfg.get("daily_cap", 60)),
+        "in_window": outreach.in_window(cfg),
+        "running": db.rows("SELECT id, total, sent, failed, dry_run FROM campaigns WHERE status LIKE 'running%' OR status LIKE 'paused%'"),
+        "settings": cfg,
+    }
 
 
 @app.post(API + "/outreach/campaigns")
@@ -514,6 +569,15 @@ def create_campaign(payload: dict = Body(...)):
 @app.get(API + "/outreach/campaigns")
 def list_campaigns():
     return db.rows("SELECT c.*, t.name template FROM campaigns c LEFT JOIN templates t ON t.id=c.template_id ORDER BY c.id DESC LIMIT 50")
+
+
+@app.get(API + "/outreach/campaigns/{cid}")
+def get_campaign(cid: int):
+    c = db.row("SELECT c.*, t.name template FROM campaigns c LEFT JOIN templates t ON t.id=c.template_id WHERE c.id=?", (cid,)) or _404("Campaign")
+    c["log"] = db.rows("SELECT s.ts, s.email, s.result, s.error, l.name company FROM sent_log s "
+                       "LEFT JOIN leads l ON l.id=s.lead_id WHERE s.campaign_id=? ORDER BY s.id DESC", (cid,))
+    c["live"] = cid in outreach.campaigns
+    return c
 
 
 @app.post(API + "/outreach/campaigns/{cid}/stop")

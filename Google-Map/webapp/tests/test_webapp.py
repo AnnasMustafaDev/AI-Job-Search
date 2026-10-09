@@ -250,3 +250,25 @@ def test_attachment_upload_rejects_bad_names(client):
     assert client.post("/api/v1/attachments?name=cv.pdf", content=b"%PDF").status_code == 200
     assert client.post("/api/v1/attachments?name=evil.exe", content=b"x").status_code == 400
     assert client.get("/api/v1/attachments").json()[0]["name"] == "cv.pdf"
+
+
+def test_leads_csv_attachment_and_outreach_status(client):
+    db.execute("INSERT INTO leads (name, domain, website, city, created_at, updated_at) VALUES ('Acme','acme.de','https://acme.de','Berlin','x','x')")
+    lid = db.row("SELECT id FROM leads WHERE domain='acme.de'")["id"]
+    db.execute("INSERT INTO emails (lead_id, email, kept, layer, reason, found_on, type, created_at) VALUES (?,?,1,0,'kept','/','jobs/hr','x')", (lid, "jobs@acme.de"))
+    r = client.post("/api/v1/attachments/from-leads", json={"name": "picks", "ids": [lid], "columns": ["name", "email", "city"]}).json()
+    assert r == {"name": "picks.csv", "rows": 1, "size": r["size"]}
+    import os
+    with open(os.path.join(config.ATTACHMENTS_DIR, "picks.csv"), encoding="utf-8-sig") as f:
+        assert f.read().splitlines() == ["name,email,city", "Acme,jobs@acme.de,Berlin"]
+    assert client.post("/api/v1/attachments/from-leads", json={"ids": [999999]}).status_code == 400
+    assert client.post("/api/v1/attachments?name=data.csv", content=b"a,b").status_code == 200
+
+    s = client.get("/api/v1/outreach/status").json()
+    assert s["smtp_ready"] is False and s["sent_today"] == 0 and "daily_cap" in s
+
+    p = client.post("/api/v1/outreach/preview", json={"lead_id": lid, "subject": "{company} in {city}", "body": "{email}"}).json()
+    assert p["subject"] == "Acme in Berlin" and p["body"] == "jobs@acme.de"
+
+    plan = client.post("/api/v1/outreach/plan", json={"lead_ids": [lid, 424242]}).json()
+    assert plan["count"] == 1 and plan["recipients"][0]["city"] == "Berlin"
