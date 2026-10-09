@@ -26,6 +26,13 @@ def build_queries(search):
     return queries
 
 
+def short_error(e):
+    """Selenium messages carry a full chromedriver stack trace; keep only the first line."""
+    msg = str(e).replace("Message:", "").strip().splitlines()
+    first = msg[0].split("(Session info")[0].strip() if msg else ""
+    return f"{type(e).__name__}: {first}"[:300]
+
+
 def domain_of(url):
     netloc = urlparse(url if "://" in url else f"http://{url}").netloc.lower()
     return netloc.removeprefix("www.").split(":")[0]
@@ -102,10 +109,16 @@ class JobRunner(threading.Thread):
                         ctx.center = api_providers.geocode(f"{q['district']}, {cfg['search'].get('city', '')}")
                     except Exception:
                         ctx.center = None
-                for listing in search_fn(q["q"], ctx):
-                    if self.stop_event.is_set():
-                        break
-                    self._handle_listing(listing, q, cfg, source)
+                try:
+                    for listing in search_fn(q["q"], ctx):
+                        if self.stop_event.is_set():
+                            break
+                        self._handle_listing(listing, q, cfg, source)
+                except api_providers.ProviderError:
+                    raise
+                except Exception as e:
+                    # One broken query (Maps re-render, network hiccup) shouldn't end the whole job.
+                    self.log("error", f"✖ Query failed, continuing with the next one: {short_error(e)}")
                 if not self.stop_event.is_set():
                     db.execute("UPDATE jobs SET query_index = ? WHERE id = ?", (i + 1, self.job_id))
             if self.stop_event.is_set():
@@ -117,8 +130,8 @@ class JobRunner(threading.Thread):
                 self.log("ok", f"✔ Job finished · {j['emails_kept']} emails kept")
         except Exception as e:
             db.execute("UPDATE jobs SET status='failed', error=?, finished_at=? WHERE id=?",
-                       (f"{type(e).__name__}: {e}", db.now(), self.job_id))
-            self.log("error", f"✖ Job failed: {type(e).__name__}: {e}")
+                       (short_error(e), db.now(), self.job_id))
+            self.log("error", f"✖ Job failed: {short_error(e)}")
         finally:
             ctx.close()
             manager.forget(self.job_id)
@@ -137,11 +150,12 @@ class JobRunner(threading.Thread):
         if excluded:
             self.log("warn", f"⚠ Skipped {name} (name contains '{excluded[0]}')")
             return
-        if s.get("min_rating") and (listing.get("rating") or 0) < float(s["min_rating"]):
-            self.log("info", f"   {name}: rating {listing.get('rating')} below minimum")
+        # Unknown rating/reviews (the source didn't return them) pass; only known low values are dropped.
+        if s.get("min_rating") and listing.get("rating") is not None and listing["rating"] < float(s["min_rating"]):
+            self.log("info", f"   {name}: rating {listing['rating']} below minimum")
             return
-        if s.get("min_reviews") and (listing.get("reviews") or 0) < int(s["min_reviews"]):
-            self.log("info", f"   {name}: {listing.get('reviews') or 0} reviews below minimum")
+        if s.get("min_reviews") and listing.get("reviews") is not None and listing["reviews"] < int(s["min_reviews"]):
+            self.log("info", f"   {name}: {listing['reviews']} reviews below minimum")
             return
         website = listing.get("website")
         if not website:

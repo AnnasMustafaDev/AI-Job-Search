@@ -80,11 +80,14 @@ def extract_emails(html, decode_obfuscation=True):
     return {e.strip().lower() for e in found if filters.plausible_tld(e.strip().rsplit("@", 1)[-1])}, soup
 
 
+SKIP_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".pdf", ".zip", ".mp4", ".mp3", ".doc", ".docx")
+
+
 def rank_relevant_pages(soup, base_url, crawl_cfg):
     keywords = [k.lower() for k in crawl_cfg.get("keywords", [])]
     never = [k.lower() for k in crawl_cfg.get("never_visit", [])]
     base_domain = urlparse(base_url).netloc.lower().removeprefix("www.")
-    scored = {}
+    scored, urls = {}, {}
     for a in soup.find_all("a", href=True):
         href_raw = a["href"]
         href = href_raw.lower()
@@ -97,9 +100,12 @@ def rank_relevant_pages(soup, base_url, crawl_cfg):
         if crawl_cfg.get("same_domain_only", True) and parsed.netloc.lower().removeprefix("www.") != base_domain:
             continue
         path = parsed.path.lower()
-        if any(n in path for n in never):
+        if any(n in path for n in never) or path.endswith(SKIP_EXTENSIONS):
             continue
         clean = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
+        # Key on host + path so http/https and www variants of one page are fetched once.
+        key = f"{parsed.netloc.lower().removeprefix('www.')}{parsed.path}".rstrip("/")
+        clean = urls.setdefault(key, clean)
         score = 0
         if any(k in path for k in ("impressum", "kontakt", "contact")):
             score += 100
@@ -110,8 +116,10 @@ def rank_relevant_pages(soup, base_url, crawl_cfg):
         if path.count("/") <= 2:
             score += 15
         scored[clean] = max(score, scored.get(clean, 0))
-    base_clean = base_url.rstrip("/")
-    ranked = sorted((u for u in scored if u != base_clean),
+    base_parsed = urlparse(base_url)
+    base_key = f"{base_parsed.netloc.lower().removeprefix('www.')}{base_parsed.path}".rstrip("/")
+    base_url_seen = urls.get(base_key)
+    ranked = sorted((u for u in scored if u != base_url_seen),
                     key=lambda u: (-scored[u], len(urlparse(u).path), u))
     return ranked[: int(crawl_cfg.get("max_relevant_pages", 8))]
 

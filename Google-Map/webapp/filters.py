@@ -24,6 +24,7 @@ LAYER_LISTS = {1: "patterns", 2: "domains", 3: "domain_suffixes", 4: "domain_ext
                5: "localparts", 6: "localpart_prefixes", 7: "localpart_contains"}
 
 _INVISIBLE = (" ", " ", "​", "﻿")
+_TRACKING_ID = re.compile(r"[0-9a-f]{16,}")
 _PLACEHOLDER = re.compile(r"(?:test|fake|dummy|sample|example|demo)[._-]?\d*")
 
 
@@ -77,6 +78,9 @@ def check_email(value, filter_cfg, site_domain=None):
         return None, 10, "www. in mail domain (text fragment)"
     if not plausible_tld(domain):
         return None, 10, "not a real TLD (text fragment)"
+    # Error-tracking DSNs (Sentry on Wix sites etc.) look like 32-char hex ids @sentry...
+    if _TRACKING_ID.fullmatch(local) or "sentry" in domain:
+        return None, 10, "tracking id, not a mailbox"
 
     if on(9) and len(local) == 1:
         return None, 9, "single-char local part"

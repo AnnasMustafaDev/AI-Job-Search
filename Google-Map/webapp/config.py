@@ -40,6 +40,16 @@ def _filter_lists_from_main():
     return lists
 
 
+# Placeholders seen on real sites that main.py's lists don't cover yet.
+EXTRA_BLOCKS = {"domains": ["domain.com", "email.com", "mysite.com", "yourdomain.com", "muster.de", "mustermann.de"]}
+
+
+def _with_extra_blocks(lists):
+    for key, extra in EXTRA_BLOCKS.items():
+        lists[key] = sorted(set(lists.get(key, [])) | set(extra))
+    return lists
+
+
 DEFAULT_CONFIG = {
     "search": {
         "city": "Berlin",
@@ -84,7 +94,7 @@ DEFAULT_CONFIG = {
     },
     "filters": {
         "layers": {**{str(i): True for i in range(1, 11)}, "11": False},
-        "lists": _filter_lists_from_main(),
+        "lists": _with_extra_blocks(_filter_lists_from_main()),
         "priority": ["jobs", "karriere", "career", "hr", "bewerbung", "personal", "hello", "contact", "kontakt", "info"],
     },
     "outreach": {

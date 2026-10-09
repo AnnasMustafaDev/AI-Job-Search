@@ -106,7 +106,7 @@ def _place_details(driver):
         or _attr(driver, "//a[contains(@aria-label,'Webseite') and @href]", "href")
     address = _attr(driver, "//button[@data-item-id='address']", "aria-label")
     phone = _attr(driver, "//button[starts-with(@data-item-id,'phone:tel:')]", "data-item-id")
-    rating_label = _attr(driver, "//div[contains(@class,'F7nice')]//span[@role='img']", "aria-label") or ""
+    rating_text = _text(driver, "//div[contains(@class,'F7nice')]/span/span[@aria-hidden='true']") or ""
     reviews_label = _attr(driver, "//div[contains(@class,'F7nice')]//span[contains(@aria-label,'Rezension') or contains(@aria-label,'review')]", "aria-label") or ""
     category = _text(driver, "//button[contains(@jsaction,'category')]")
     closed_text = (_text(driver, "//span[contains(., 'Dauerhaft geschlossen') or contains(., 'Permanently closed')]") or "")
@@ -115,11 +115,22 @@ def _place_details(driver):
         "website": resolve_google_redirect(website).split("?")[0] if website else None,
         "address": address.split(":", 1)[-1].strip() if address else None,
         "phone": phone.replace("phone:tel:", "") if phone else None,
-        "rating": _num(rating_label),
+        "rating": _num(rating_text),
         "reviews": int(_num(reviews_label.replace(".", "").replace(",", "")) or 0) if reviews_label else None,
         "category": category,
         "closed": bool(closed_text),
     }
+
+
+CARD_RATING_RE = re.compile(r"(\d[,.]\d)\s*\(([\d.,\s]+)\)")
+
+
+def _card_rating(text):
+    """Result cards show rating and review count as '4,5(2.345)'."""
+    m = CARD_RATING_RE.search(text or "")
+    if not m:
+        return None, None
+    return float(m.group(1).replace(",", ".")), int(re.sub(r"\D", "", m.group(2)) or 0)
 
 
 def _num(label):
@@ -127,67 +138,125 @@ def _num(label):
     return float(m.group(0).replace(",", ".")) if m else None
 
 
+def _wait_for_results(driver, timeout=12):
+    """Wait until Maps shows a results feed, a single place panel, or a 'no results' message."""
+    from selenium.webdriver.common.by import By
+    end = time.time() + timeout
+    while time.time() < end:
+        if driver.find_elements(By.XPATH, "//div[@role='feed']"):
+            return "feed"
+        if driver.find_elements(By.XPATH, "//h1[contains(@class,'DUwDvf')]"):
+            return "place"
+        if _text(driver, "//div[contains(., 'Google Maps kann') or contains(., \"Google Maps can't find\")]"):
+            return "none"
+        time.sleep(0.5)
+    return "none"
+
+
+def _card_info(driver, href):
+    """Re-find a card by its link each time: clicking a listing re-renders the feed,
+    so element references from an earlier lookup go stale."""
+    from selenium.webdriver.common.by import By
+    cards = [c for c in driver.find_elements(By.XPATH, "//div[@role='feed']" + CARD_XPATH[1:])
+             if c.get_attribute("href") == href]
+    if not cards:
+        return None, False, ""
+    card = cards[0]
+    label = " ".join(filter(None, [card.get_attribute("aria-label"), card.text])).lower()
+    try:
+        label += " " + card.find_element(By.XPATH, "./..").text.lower()
+    except Exception:
+        pass
+    return card, any(t in label for t in SPONSORED_TOKENS), label
+
+
+def _feed_hrefs(driver):
+    from selenium.common.exceptions import StaleElementReferenceException
+    from selenium.webdriver.common.by import By
+    hrefs = []
+    for c in driver.find_elements(By.XPATH, "//div[@role='feed']" + CARD_XPATH[1:]):
+        try:
+            h = c.get_attribute("href")
+        except StaleElementReferenceException:
+            continue
+        if h and h not in hrefs:
+            hrefs.append(h)
+    return hrefs
+
+
 def search(query, ctx):
+    from selenium.common.exceptions import StaleElementReferenceException, WebDriverException
     from selenium.webdriver.common.by import By
 
     driver = ctx.driver()
     zoom = ctx.search.get("zoom", 14)
-    url = f"https://www.google.com/maps/search/{quote_plus(query)}/?hl={ctx.search.get('language', 'de')}"
+    lang = ctx.search.get("language", "de")
+    url = f"https://www.google.com/maps/search/{quote_plus(query)}/?hl={lang}"
     if ctx.center:
-        url = f"https://www.google.com/maps/search/{quote_plus(query)}/@{ctx.center['lat']},{ctx.center['lng']},{zoom}z?hl={ctx.search.get('language', 'de')}"
+        url = f"https://www.google.com/maps/search/{quote_plus(query)}/@{ctx.center['lat']},{ctx.center['lng']},{zoom}z?hl={lang}"
     driver.get(url)
-    time.sleep(2)
+    time.sleep(1)
     if _accept_consent(driver):
         ctx.log("info", "Privacy dialog accepted")
 
-    seen, yielded, stagnant = set(), 0, 0
+    kind = _wait_for_results(driver)
+    if kind == "none":
+        ctx.log("warn", f"No results on Google Maps for: {query}")
+        return
+    if kind == "place":
+        # A single exact match opens the place panel directly.
+        details = _place_details(driver)
+        details.update(maps_url=driver.current_url, sponsored=False, lat=None, lng=None)
+        yield details
+        return
+
+    seen, yielded, stagnant, errors = set(), 0, 0, 0
     while yielded < ctx.max_results and stagnant < 4 and not ctx.should_stop():
         ctx.wait_if_paused()
-        feeds = driver.find_elements(By.XPATH, "//div[@role='feed']")
-        if not feeds:
-            # A single exact match opens the place panel directly.
-            details = _place_details(driver)
-            if details["name"]:
-                details.update(maps_url=driver.current_url, sponsored=False, lat=None, lng=None)
-                yield details
-            return
-        feed = feeds[0]
-        cards = feed.find_elements(By.XPATH, CARD_XPATH)
-        fresh = [c for c in cards if c.get_attribute("href") not in seen]
-        if not fresh:
-            driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", feed)
+        hrefs = [h for h in _feed_hrefs(driver) if h not in seen]
+        if not hrefs:
+            feeds = driver.find_elements(By.XPATH, "//div[@role='feed']")
+            if feeds:
+                try:
+                    driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", feeds[0])
+                except StaleElementReferenceException:
+                    pass
             time.sleep(1.5 + random.random())
             stagnant += 1
             if _text(driver, "//span[contains(., 'Ende der Liste') or contains(., \"You've reached the end\")]"):
                 return
             continue
         stagnant = 0
-        ctx.log("info", f"Feed loaded {len(cards)} listings")
-        for card in fresh:
+        ctx.log("info", f"Feed loaded {len(seen) + len(hrefs)} listings")
+        for href in hrefs:
             if ctx.should_stop() or yielded >= ctx.max_results:
                 return
             ctx.wait_if_paused()
-            href = card.get_attribute("href")
             seen.add(href)
-            label = " ".join(filter(None, [card.get_attribute("aria-label"), card.text])).lower()
-            parent_text = ""
             try:
-                parent_text = card.find_element(By.XPATH, "./..").text.lower()
-            except Exception:
-                pass
-            sponsored = any(t in label or t in parent_text for t in SPONSORED_TOKENS)
-            try:
+                card, sponsored, card_text = _card_info(driver, href)
+                if card is None:
+                    continue
+                name_hint = card.get_attribute("aria-label")
+                if sponsored:
+                    yield {"name": name_hint, "website": None, "sponsored": True, "maps_url": href}
+                    continue
                 driver.execute_script("arguments[0].scrollIntoView({block:'center'})", card)
                 card.click()
                 time.sleep(ctx.delay())
                 details = _place_details(driver)
-            except Exception as e:
-                ctx.log("warn", f"Could not open listing: {type(e).__name__}")
+            except (StaleElementReferenceException, WebDriverException) as e:
+                errors += 1
+                ctx.log("warn", f"Could not open listing ({type(e).__name__}); skipping")
+                if errors > 15:
+                    raise RuntimeError("Too many listing errors; Google Maps layout may have changed") from e
                 continue
-            m = re.search(r"!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)", unquote(href or ""))
-            details.update(maps_url=href, sponsored=sponsored,
+            m = re.search(r"!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)", unquote(href))
+            details.update(maps_url=href, sponsored=False,
                            lat=float(m.group(1)) if m else None, lng=float(m.group(2)) if m else None)
-            if not details["name"]:
-                details["name"] = card.get_attribute("aria-label")
+            details["name"] = details["name"] or name_hint
+            card_rating, card_reviews = _card_rating(card_text)
+            details["rating"] = details["rating"] or card_rating
+            details["reviews"] = details["reviews"] or card_reviews
             yielded += 1
             yield details

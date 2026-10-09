@@ -138,6 +138,12 @@ function updateSummary() {
   $('#qlist').innerHTML = q.map(esc).join('<br>');
 }
 $('#srcSel').onchange = updateSummary;
+// Districts belong to one city; changing the city without reloading them builds queries like "Kreuzberg munich".
+$('[data-k="search.city"]').addEventListener('change', () => {
+  if (S.search.locations.length && confirm(`City changed to "${S.search.city}". The locations (${S.search.locations.slice(0, 3).join(', ')}…) are from the previous city.\n\nClear them? (Then use "Load districts from OpenStreetMap".)`)) {
+    S.search.locations = []; bindInputs(); updateSummary();
+  }
+});
 $$('.sug').forEach(s => { s.style.cursor = 'pointer'; s.onclick = () => { if (!S.search.keywords.includes(s.textContent)) S.search.keywords.push(s.textContent); bindInputs(); updateSummary(); }; });
 $('#suggestDistricts').onclick = async e => {
   const b = e.currentTarget; b.disabled = true; b.innerHTML = '<span class="spin"></span> Loading…';

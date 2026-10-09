@@ -166,6 +166,39 @@ def test_scrape_fills_in_imported_lead(client, monkeypatch):
     assert (lead["name"], lead["district"], lead["rating"], lead["job_id"]) == ("Acme GmbH", "Mitte", 4.5, job["id"])
 
 
+def test_failed_query_does_not_end_job(client, monkeypatch):
+    def flaky(query, ctx):
+        if "Mitte" in query:
+            raise RuntimeError("Message: stale element reference\n  Stacktrace: chromedriver!...")
+        yield {"name": "Beta GmbH", "website": "https://beta.de", "sponsored": False, "closed": False}
+    monkeypatch.setitem(PROVIDERS, "selenium_maps", flaky)
+    monkeypatch.setattr(crawler, "crawl_site", lambda *a: ({}, ["/"]))
+    client.put("/api/v1/config", json={"providers": {"nominatim": {"enabled": False}}})
+    job = client.post("/api/v1/jobs", json={"search": {"keywords": ["it"], "locations": ["Mitte", "Wedding"], "city": "Berlin"}}).json()
+    for _ in range(50):
+        j = client.get(f"/api/v1/jobs/{job['id']}").json()
+        if j["status"] == "done":
+            break
+        time.sleep(0.1)
+    assert j["status"] == "done" and j["websites"] == 1
+    msgs = [l["message"] for l in client.get(f"/api/v1/jobs/{job['id']}/logs").json()]
+    failed = [m for m in msgs if "Query failed" in m]
+    assert failed and "Stacktrace" not in failed[0]
+
+
+def test_tracking_ids_and_placeholders_blocked():
+    assert filters.check_email("9a65e97ebe8141fca0c4fd686f70996b@sentry.wixpress.com", FILTERS)[1] == 10
+    assert filters.check_email("benutzer@domain.com", FILTERS)[0] is None
+    assert filters.check_email("sven@boheme-schwabing.de", FILTERS)[0] == "sven@boheme-schwabing.de"
+
+
+def test_crawler_skips_assets_and_duplicate_pages():
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup('<a href="/impressum.html">Impressum</a><a href="https://www.acme.de/impressum.html">Impressum</a>'
+                         '<a href="/team/photo.jpg">Team</a>', "html.parser")
+    assert crawler.rank_relevant_pages(soup, "http://acme.de", config.default_config()["crawl"]) == ["http://acme.de/impressum.html"]
+
+
 def test_reapply_drops_text_fragments():
     assert filters.check_email("year@lums.with", FILTERS)[1] == 10
     assert filters.check_email("more@www.ness.com", FILTERS)[1] == 10
